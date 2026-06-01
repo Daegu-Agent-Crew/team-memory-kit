@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+SOURCE_DIR="$(cd "$(dirname "$0")" >/dev/null 2>&1 && pwd -P)"
+HOST="codex"
+STATE_MODE="symlink"
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --host) HOST="${2:?Missing value for --host}"; shift 2 ;;
+    --host=*) HOST="${1#--host=}"; shift ;;
+    --state) STATE_MODE="${2:?Missing value for --state}"; shift 2 ;;
+    --state=*) STATE_MODE="${1#--state=}"; shift ;;
+    -h|--help)
+      echo "Usage: ./setup [--host codex|claude|auto] [--state symlink|none]" >&2
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      exit 2
+      ;;
+  esac
+done
+
+case "$HOST" in
+  codex|claude|auto) ;;
+  *) echo "Unknown host: $HOST" >&2; exit 2 ;;
+esac
+
+if [ "$STATE_MODE" = "symlink" ]; then
+  MEMORY_HOME="${TEAM_MEMORY_HOME:-$HOME/.team-memory}"
+  if [ -e "$MEMORY_HOME" ] && [ ! -L "$MEMORY_HOME" ]; then
+    echo "Preserving existing $MEMORY_HOME"
+  elif [ -L "$MEMORY_HOME" ]; then
+    current="$(readlink "$MEMORY_HOME")"
+    if [ "$current" != "$SOURCE_DIR/context" ]; then
+      rm -f "$MEMORY_HOME"
+      ln -s "$SOURCE_DIR/context" "$MEMORY_HOME"
+    fi
+  else
+    ln -s "$SOURCE_DIR/context" "$MEMORY_HOME"
+  fi
+fi
+
+install_codex() {
+  skills_dir="$HOME/.codex/skills"
+  mkdir -p "$skills_dir"
+  for skill_dir in "$SOURCE_DIR"/skills/tm-*; do
+    [ -f "$skill_dir/SKILL.md" ] || continue
+    name="$(basename "$skill_dir")"
+    target="$skills_dir/$name"
+    if [ -L "$target" ] || [ ! -e "$target" ]; then
+      ln -snf "$skill_dir" "$target"
+      echo "linked Codex skill: $name"
+    else
+      echo "preserving existing Codex skill: $target"
+    fi
+  done
+}
+
+install_claude() {
+  skills_dir="$HOME/.claude/skills"
+  mkdir -p "$skills_dir"
+  for skill_dir in "$SOURCE_DIR"/skills/tm-*; do
+    [ -f "$skill_dir/SKILL.md" ] || continue
+    name="$(basename "$skill_dir")"
+    target="$skills_dir/$name"
+    mkdir -p "$target"
+    ln -snf "$skill_dir/SKILL.md" "$target/SKILL.md"
+    echo "linked Claude skill: $name"
+  done
+}
+
+case "$HOST" in
+  codex) install_codex ;;
+  claude) install_claude ;;
+  auto)
+    install_codex
+    install_claude
+    ;;
+esac
+
+mkdir -p "$SOURCE_DIR/context/records" "$SOURCE_DIR/context/wiki" "$SOURCE_DIR/context/registry"
+echo "team-memory setup complete"

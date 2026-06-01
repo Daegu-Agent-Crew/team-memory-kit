@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+eval "$("$SCRIPT_DIR/memory-paths")"
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  cat <<'USAGE'
+Usage: memory-sync
+
+Runs memory-verify and prints Git status plus the next sharing commands.
+It does not push.
+USAGE
+  exit 0
+fi
+
+"$SCRIPT_DIR/memory-verify"
+printf '\nGit status:\n'
+git -C "$MEMORY_REPO_ROOT" status --short
+printf '\nNext steps:\n'
+printf '  git add <intentional files>\n'
+printf '  git commit -m "context: update team memory"\n'
+printf '  git push\n'
+printf '  bin/memory-share-plan --project <project> --title "<summary>"\n'

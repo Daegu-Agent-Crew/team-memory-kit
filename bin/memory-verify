@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+eval "$("$SCRIPT_DIR/memory-paths")"
+
+errors=0
+
+fail() {
+  printf 'memory-verify: %s\n' "$*" >&2
+  errors=$((errors + 1))
+}
+
+is_member() {
+  local member=$1
+  [ -f "$MEMORY_MEMBER_FILE" ] || return 1
+  awk '
+    /^[[:space:]]*-[[:space:]]*/ {
+      value=$0
+      sub(/^[[:space:]]*-[[:space:]]*/, "", value)
+      gsub(/[[:space:]]+$/, "", value)
+      if (value == target) found=1
+    }
+    END { exit(found ? 0 : 1) }
+  ' target="$member" "$MEMORY_MEMBER_FILE"
+}
+
+frontmatter_value() {
+  local key=$1 file=$2
+  awk -F': ' -v key="$key" '
+    $1 == key {
+      value=$0
+      sub("^[^:]+:[[:space:]]*", "", value)
+      gsub(/^"/, "", value)
+      gsub(/"$/, "", value)
+      print value
+      exit
+    }
+  ' "$file"
+}
+
+for dir in "$MEMORY_CONTEXT_ROOT" "$MEMORY_REGISTRY_ROOT" "$MEMORY_CONTEXT_ROOT/records" "$MEMORY_CONTEXT_ROOT/wiki"; do
+  [ -d "$dir" ] || fail "missing required directory: ${dir#"$MEMORY_REPO_ROOT"/}"
+done
+
+"$SCRIPT_DIR/memory-secret-scan" >/dev/null || fail "secret/privacy scan failed"
+"$SCRIPT_DIR/memory-project" --validate >/dev/null || fail "registry validation failed"
+
+if [ ! -f "$MEMORY_MEMBER_FILE" ]; then
+  fail "member allowlist missing: ${MEMORY_MEMBER_FILE#"$MEMORY_REPO_ROOT"/}"
+else
+  while IFS= read -r member; do
+    [ -n "$member" ] || continue
+    if ! printf '%s\n' "$member" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$'; then
+      fail "member allowlist must contain GitHub usernames only: $member"
+    fi
+  done < <(awk '/^[[:space:]]*-[[:space:]]*/ { value=$0; sub(/^[[:space:]]*-[[:space:]]*/, "", value); gsub(/[[:space:]]+$/, "", value); print value }' "$MEMORY_MEMBER_FILE")
+fi
+
+if [ -d "$MEMORY_CONTEXT_ROOT/records/projects/misc" ]; then
+  if find "$MEMORY_CONTEXT_ROOT/records/projects/misc" -type f -name '*.md' | grep -q .; then
+    fail "records under project 'misc' require explicit user confirmation and are blocked by default"
+  fi
+fi
+
+while IFS= read -r record; do
+  member=$(frontmatter_value member "$record")
+  project=$(frontmatter_value project "$record")
+  title=$(frontmatter_value title "$record")
+  source_type=$(frontmatter_value source_type "$record")
+  [ -n "$title" ] || fail "record missing title: ${record#"$MEMORY_REPO_ROOT"/}"
+  [ -n "$project" ] || fail "record missing project: ${record#"$MEMORY_REPO_ROOT"/}"
+  [ -n "$member" ] || fail "record missing member: ${record#"$MEMORY_REPO_ROOT"/}"
+  [ -n "$source_type" ] || fail "record missing source_type: ${record#"$MEMORY_REPO_ROOT"/}"
+  if [ -n "$member" ] && ! is_member "$member"; then
+    fail "record member '$member' is not listed: ${record#"$MEMORY_REPO_ROOT"/}"
+  fi
+done < <(find "$MEMORY_CONTEXT_ROOT/records/projects" -type f -name '*.md' 2>/dev/null | sort)
+
+while IFS= read -r wiki; do
+  rel=${wiki#"$MEMORY_REPO_ROOT"/}
+  citations=$(grep -oE '\[source: [^]]+\]' "$wiki" || true)
+  if [ -z "$citations" ]; then
+    fail "wiki has no source citations: $rel"
+    continue
+  fi
+  while IFS= read -r citation; do
+    [ -n "$citation" ] || continue
+    path=${citation#"[source: "}
+    path=${path%"]"}
+    if [ ! -f "$MEMORY_REPO_ROOT/$path" ]; then
+      fail "broken wiki citation in $rel -> $path"
+    fi
+  done <<< "$citations"
+done < <(find "$MEMORY_CONTEXT_ROOT/wiki" -type f -name '*.md' 2>/dev/null | sort)
+
+while IFS= read -r helper; do
+  name=$(basename "$helper")
+  case "$name" in
+    memory-*) ;;
+    *) fail "helper script must start with memory-: ${helper#"$MEMORY_REPO_ROOT"/}" ;;
+  esac
+done < <(find "$MEMORY_REPO_ROOT/bin" -maxdepth 1 -type f 2>/dev/null | sort)
+
+while IFS= read -r skill; do
+  dir=$(basename "$(dirname "$skill")")
+  name=$(awk -F': ' '$1 == "name" { print $2; exit }' "$skill")
+  case "$dir" in
+    tm-*) ;;
+    *) fail "skill directory must start with tm-: ${skill#"$MEMORY_REPO_ROOT"/}" ;;
+  esac
+  case "$name" in
+    tm-*) ;;
+    *) fail "skill name must start with tm-: ${skill#"$MEMORY_REPO_ROOT"/}" ;;
+  esac
+done < <(find "$MEMORY_REPO_ROOT/skills" -type f -name 'SKILL.md' 2>/dev/null | sort)
+
+if [ "$errors" -gt 0 ]; then
+  printf 'memory-verify: failed with %s issue(s)\n' "$errors" >&2
+  exit 1
+fi
+
+printf 'memory verify ok\n'

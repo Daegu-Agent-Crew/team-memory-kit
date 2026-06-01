@@ -1,0 +1,19 @@
+name: Verify team memory
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests if present
+        run: |
+          chmod +x bin/memory-* tests/*.sh 2>/dev/null || true
+          if [ -d tests ]; then tests/run.sh; fi
+      - name: Run memory verification
+        run: |
+          chmod +x bin/memory-*
+          bin/memory-verify

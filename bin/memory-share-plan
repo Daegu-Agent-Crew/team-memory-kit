@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+eval "$("$SCRIPT_DIR/memory-paths")"
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: memory-share-plan [--project <id>] [--commit <sha>] [--title <title>] [--paths <file> ...]
+
+Builds an approval-gated Slack/Discord/message draft. This command never writes
+to an external destination.
+USAGE
+}
+
+project=""
+title=""
+commit="HEAD"
+paths=()
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --project) project=${2:?Missing value for --project}; shift 2 ;;
+    --commit) commit=${2:?Missing value for --commit}; shift 2 ;;
+    --title) title=${2:?Missing value for --title}; shift 2 ;;
+    --paths) shift ;;
+    -h|--help) usage; exit 0 ;;
+    --*) printf 'memory-share-plan: unknown argument: %s\n' "$1" >&2; usage; exit 2 ;;
+    *) paths+=("$1"); shift ;;
+  esac
+done
+
+if [ -z "$project" ]; then
+  project=$("$SCRIPT_DIR/memory-project")
+fi
+[ -n "$title" ] || title="$project team memory update"
+
+commit_sha=""
+short_commit=""
+if git -C "$MEMORY_REPO_ROOT" rev-parse --verify "$commit" >/dev/null 2>&1; then
+  commit_sha=$(git -C "$MEMORY_REPO_ROOT" rev-parse --verify "$commit")
+  short_commit=$(git -C "$MEMORY_REPO_ROOT" rev-parse --short "$commit_sha")
+fi
+
+if [ "${#paths[@]}" -eq 0 ] && [ -n "$commit_sha" ]; then
+  while IFS= read -r rel; do
+    case "$rel" in
+      context/records/*|context/wiki/*) paths+=("$rel") ;;
+    esac
+  done < <(git -C "$MEMORY_REPO_ROOT" diff-tree --root --no-commit-id --name-only -r "$commit_sha")
+fi
+
+if [ "${#paths[@]}" -eq 0 ]; then
+  while IFS= read -r rel; do
+    case "$rel" in
+      context/records/*|context/wiki/*) paths+=("$rel") ;;
+    esac
+  done < <(git -C "$MEMORY_REPO_ROOT" status --porcelain --untracked-files=all | sed -E 's/^...//; s/^"//; s/"$//')
+fi
+
+[ "${#paths[@]}" -gt 0 ] || {
+  printf 'memory-share-plan: no context records/wiki paths found. Pass --paths explicitly.\n' >&2
+  exit 3
+}
+
+origin=$(git -C "$MEMORY_REPO_ROOT" remote get-url origin 2>/dev/null || true)
+github_base=""
+case "$origin" in
+  git@github.com:*)
+    slug=${origin#git@github.com:}
+    slug=${slug%.git}
+    github_base="https://github.com/$slug"
+    ;;
+  https://github.com/*)
+    slug=${origin#https://github.com/}
+    slug=${slug%.git}
+    github_base="https://github.com/$slug"
+    ;;
+esac
+
+printf '# Team Memory Share Draft\n\n'
+printf 'Approval required: review this draft before any Slack, Discord, email, or chat write.\n\n'
+printf 'Project: %s\n' "$project"
+printf 'Title: %s\n' "$title"
+[ -n "$short_commit" ] && printf 'Commit: %s\n' "$short_commit"
+[ -n "$github_base" ] && [ -n "$commit_sha" ] && printf 'Commit URL: %s/commit/%s\n' "$github_base" "$commit_sha"
+printf '\n## Destination Candidates\n'
+channel_count=0
+while IFS= read -r channel; do
+  [ -n "$channel" ] || continue
+  name=$(awk -F': ' '$1 == "name" { print $2; exit }' "$channel")
+  kind=$(awk -F': ' '$1 == "kind" { print $2; exit }' "$channel")
+  channel_project=$(awk -F': ' '$1 == "project" { print $2; exit }' "$channel")
+  if [ "$channel_project" = "$project" ]; then
+    printf -- '- %s (%s)\n' "${name:-${channel##*/}}" "${kind:-messenger}"
+    channel_count=$((channel_count + 1))
+  fi
+done < <(find "$MEMORY_REGISTRY_ROOT/messengers/channels" -type f -name '*.yml' 2>/dev/null | sort)
+[ "$channel_count" -gt 0 ] || printf -- '- none configured. Add context/registry/messengers/channels/<name>.yml.\n'
+
+printf '\n## Source Files\n'
+for rel in "${paths[@]}"; do
+  rel=${rel#"$MEMORY_REPO_ROOT"/}
+  rel=${rel#./}
+  if [ -n "$github_base" ] && [ -n "$commit_sha" ]; then
+    printf -- '- [%s](%s/blob/%s/%s)\n' "$rel" "$github_base" "$commit_sha" "$rel"
+  else
+    printf -- '- %s\n' "$rel"
+  fi
+done
+
+printf '\n## Root Message Draft\n'
+printf '```text\n'
+printf '[team-memory] %s: %s\n' "$project" "$title"
+printf '```\n'
+
+printf '\n## Thread / Body Draft\n'
+printf '```text\n'
+printf 'Team memory updated for %s.\n\n' "$project"
+printf 'Summary:\n'
+printf '%s\n' '- Review the linked source records and wiki updates.'
+printf '%s\n\n' '- Future agent sessions should run memory-load before related work.'
+printf 'Source:\n'
+if [ -n "$github_base" ] && [ -n "$commit_sha" ]; then
+  printf -- '- Commit: %s/commit/%s\n' "$github_base" "$commit_sha"
+else
+  printf -- '- Commit: %s\n' "${short_commit:-uncommitted}"
+fi
+for rel in "${paths[@]}"; do
+  rel=${rel#"$MEMORY_REPO_ROOT"/}
+  rel=${rel#./}
+  if [ -n "$github_base" ] && [ -n "$commit_sha" ]; then
+    printf '  - %s/blob/%s/%s\n' "$github_base" "$commit_sha" "$rel"
+  else
+    printf '  - %s\n' "$rel"
+  fi
+done
+printf '```\n'

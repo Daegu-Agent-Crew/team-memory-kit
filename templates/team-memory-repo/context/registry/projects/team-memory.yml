@@ -1,0 +1,5 @@
+id: team-memory
+name: "Team Memory"
+status: active
+kind: "example"
+description: "Example project for a new team memory repo."

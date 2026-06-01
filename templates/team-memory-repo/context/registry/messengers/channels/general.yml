@@ -1,0 +1,4 @@
+name: general
+kind: messenger
+project: team-memory
+description: "Default share destination candidate. Replace with Slack, Discord, or another team channel."

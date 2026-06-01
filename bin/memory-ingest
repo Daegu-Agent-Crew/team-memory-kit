@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+eval "$("$SCRIPT_DIR/memory-paths")"
+
+usage() {
+  cat <<'USAGE'
+Usage: memory-ingest --title TITLE --source-type TYPE [--project PROJECT] [--member GITHUB] [--source-ref REF] FILE
+
+Creates an append-only source record under context/records/projects/<project>/.
+USAGE
+}
+
+die() {
+  printf 'memory-ingest: %s\n' "$*" >&2
+  exit 1
+}
+
+is_member() {
+  local member=$1
+  [ -f "$MEMORY_MEMBER_FILE" ] || return 1
+  awk '
+    /^[[:space:]]*-[[:space:]]*/ {
+      value=$0
+      sub(/^[[:space:]]*-[[:space:]]*/, "", value)
+      gsub(/[[:space:]]+$/, "", value)
+      if (value == target) found=1
+    }
+    END { exit(found ? 0 : 1) }
+  ' target="$member" "$MEMORY_MEMBER_FILE"
+}
+
+slugify() {
+  printf '%s' "$1" |
+    tr '[:upper:]' '[:lower:]' |
+    sed -E 's/[^a-z0-9가-힣._-]+/-/g; s/^-+//; s/-+$//; s/-+/-/g'
+}
+
+yaml_quote() {
+  printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+}
+
+project=""
+member=${TEAM_MEMORY_MEMBER:-}
+source_type=""
+source_ref=""
+title=""
+input=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --project)
+      project=${2:-}
+      [ -n "$project" ] || die "--project needs a value"
+      shift 2
+      ;;
+    --member)
+      member=${2:-}
+      [ -n "$member" ] || die "--member needs a value"
+      shift 2
+      ;;
+    --source-type)
+      source_type=${2:-}
+      [ -n "$source_type" ] || die "--source-type needs a value"
+      shift 2
+      ;;
+    --source-ref)
+      source_ref=${2:-}
+      shift 2
+      ;;
+    --title)
+      title=${2:-}
+      [ -n "$title" ] || die "--title needs a value"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --*)
+      die "unknown argument: $1"
+      ;;
+    *)
+      [ -z "$input" ] || die "only one input file is supported"
+      input=${1:-}
+      shift
+      ;;
+  esac
+done
+
+[ -n "$input" ] || die "missing input file. Fix: pass a Markdown/text file."
+[ -f "$input" ] || die "input file not found: $input"
+[ -n "$title" ] || die "missing --title"
+[ -n "$source_type" ] || die "missing --source-type"
+
+case "$source_type" in
+  codex-session|messenger-manual|meeting-note|research-note|markdown|decision|repo-note) ;;
+  *) die "invalid source type '$source_type'. Use codex-session, messenger-manual, meeting-note, research-note, markdown, decision, or repo-note." ;;
+esac
+
+if [ -z "$project" ]; then
+  project=$("$SCRIPT_DIR/memory-project")
+fi
+
+if [ -z "$member" ]; then
+  member=$(git -C "$MEMORY_REPO_ROOT" config github.user 2>/dev/null || true)
+fi
+
+[ -n "$member" ] || die "missing member. Fix: pass --member <github> listed in .github/team-memory-members.yml."
+printf '%s\n' "$member" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$' || die "member is not a valid GitHub username: $member"
+is_member "$member" || die "member '$member' is not listed in .github/team-memory-members.yml."
+
+"$SCRIPT_DIR/memory-secret-scan" "$input" >/dev/null
+
+date_value=$(date +%F)
+slug=$(slugify "$title")
+[ -n "$slug" ] || slug="record"
+record_dir="$MEMORY_CONTEXT_ROOT/records/projects/$project"
+mkdir -p "$record_dir"
+target="$record_dir/$date_value-$slug.md"
+if [ -e "$target" ]; then
+  target="$record_dir/$date_value-$slug-$(date +%H%M%S).md"
+fi
+
+{
+  printf '%s\n' '---'
+  printf 'schema_version: 1\n'
+  printf 'title: %s\n' "$(yaml_quote "$title")"
+  printf 'date: %s\n' "$date_value"
+  printf 'project: %s\n' "$project"
+  printf 'member: %s\n' "$member"
+  printf 'source_type: %s\n' "$source_type"
+  printf 'source_ref: %s\n' "$(yaml_quote "$source_ref")"
+  printf 'status: raw-record\n'
+  printf '%s\n\n' '---'
+  cat "$input"
+  printf '\n'
+} > "$target"
+
+"$SCRIPT_DIR/memory-secret-scan" "$target" >/dev/null
+printf '%s\n' "$target"

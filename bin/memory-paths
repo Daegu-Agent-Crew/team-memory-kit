@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+die() {
+  printf 'memory-paths: %s\n' "$*" >&2
+  exit 1
+}
+
+quote_sh() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+script_root=$(cd "$script_dir/.." && pwd)
+cwd_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+
+if [ -n "${TEAM_MEMORY_REPO_ROOT:-}" ]; then
+  repo_root=$TEAM_MEMORY_REPO_ROOT
+elif [ -d "$script_root/context" ] && [ -d "$script_root/.git" ]; then
+  repo_root=$script_root
+elif [ -n "$cwd_root" ]; then
+  repo_root=$cwd_root
+else
+  die "not inside a Git repository. Fix: cd into a team memory repo and retry."
+fi
+
+context_root=${TEAM_MEMORY_CONTEXT_ROOT:-"$repo_root/context"}
+home_root=${TEAM_MEMORY_HOME:-"$HOME/.team-memory"}
+tmp_root=${TMPDIR:-/tmp}
+
+printf 'MEMORY_REPO_ROOT=%s\n' "$(quote_sh "$repo_root")"
+printf 'MEMORY_CONTEXT_ROOT=%s\n' "$(quote_sh "$context_root")"
+printf 'MEMORY_HOME=%s\n' "$(quote_sh "$home_root")"
+printf 'MEMORY_MEMBER_FILE=%s\n' "$(quote_sh "${TEAM_MEMORY_MEMBER_FILE:-"$repo_root/.github/team-memory-members.yml"}")"
+printf 'MEMORY_REGISTRY_ROOT=%s\n' "$(quote_sh "$context_root/registry")"
+printf 'MEMORY_POLICY_ROOT=%s\n' "$(quote_sh "$context_root/policies")"
+printf 'MEMORY_SHARE_DRAFT_ROOT=%s\n' "$(quote_sh "$context_root/share-drafts")"
+printf 'MEMORY_TMP_ROOT=%s\n' "$(quote_sh "$tmp_root")"

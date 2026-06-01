@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+KIT_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
+
+usage() {
+  cat <<'USAGE'
+Usage: memory-init TARGET_DIR
+
+Creates a self-contained private team memory repo skeleton in TARGET_DIR.
+TARGET_DIR must be missing or empty.
+USAGE
+}
+
+die() {
+  printf 'memory-init: %s\n' "$*" >&2
+  exit 1
+}
+
+[ "${1:-}" != "-h" ] && [ "${1:-}" != "--help" ] || { usage; exit 0; }
+target=${1:-}
+[ -n "$target" ] || { usage; exit 2; }
+
+if [ -e "$target" ] && find "$target" -mindepth 1 -print -quit 2>/dev/null | grep -q .; then
+  die "target exists and is not empty: $target"
+fi
+
+mkdir -p "$target"
+cp -R "$KIT_ROOT/templates/team-memory-repo/." "$target/"
+mkdir -p "$target/bin" "$target/skills"
+cp "$KIT_ROOT"/bin/memory-* "$target/bin/"
+cp -R "$KIT_ROOT"/skills/tm-* "$target/skills/"
+cp "$KIT_ROOT/setup" "$target/setup"
+chmod +x "$target"/bin/memory-* "$target/setup"
+
+if ! git -C "$target" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  git -C "$target" init >/dev/null
+fi
+
+printf 'Created team memory repo at %s\n' "$target"
+printf 'Next:\n'
+printf '  cd %s\n' "$target"
+printf '  ./setup --host codex\n'
+printf '  edit .github/team-memory-members.yml and context/registry/repositories/team-memory.yml\n'
+printf '  bin/memory-setup\n'

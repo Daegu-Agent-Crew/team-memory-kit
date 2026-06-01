@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+eval "$("$SCRIPT_DIR/memory-paths")"
+eval "$("$SCRIPT_DIR/memory-project" --shell)"
+
+printf 'Team memory project: %s\n' "$MEMORY_PROJECT"
+printf 'Repo slug: %s (%s %s)\n' "$MEMORY_REPO_SLUG" "$MEMORY_PROJECT_SOURCE" "$MEMORY_PROJECT_MATCH"
+printf 'Registry:\n'
+printf '  %s\n' "context/registry/projects/$MEMORY_PROJECT.yml"
+printf '  %s\n' "context/registry/repositories"
+
+wiki_dir="$MEMORY_CONTEXT_ROOT/wiki/projects/$MEMORY_PROJECT"
+if [ -d "$wiki_dir" ] && find "$wiki_dir" -type f -name '*.md' | grep -q .; then
+  printf 'Wiki:\n'
+  find "$wiki_dir" -type f -name '*.md' | sort | sed "s|^$MEMORY_REPO_ROOT/|  |"
+else
+  printf 'Wiki:\n'
+  printf '  none yet. Run bin/memory-wiki after ingesting records.\n'
+fi
+
+record_dir="$MEMORY_CONTEXT_ROOT/records/projects/$MEMORY_PROJECT"
+printf 'Recent records:\n'
+if [ -d "$record_dir" ] && find "$record_dir" -type f -name '*.md' | grep -q .; then
+  find "$record_dir" -type f -name '*.md' | sort | tail -10 | sed "s|^$MEMORY_REPO_ROOT/|  |"
+else
+  printf '  none yet. Run bin/memory-ingest to create one.\n'
+fi

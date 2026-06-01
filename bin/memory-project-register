@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+eval "$("$SCRIPT_DIR/memory-paths")"
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage:
+  memory-project-register --project <id> [--role <text>]
+  memory-project-register --new-project <id> --name <name> --kind <kind> --description <text> [--role <text>]
+
+Maps the current Git repository to an existing project, or creates a new project
+plus the repository mapping.
+USAGE
+}
+
+die() {
+  printf 'memory-project-register: %s\n' "$*" >&2
+  exit 1
+}
+
+yaml_quote() {
+  printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+}
+
+validate_project_id() {
+  printf '%s' "$1" | grep -Eq '^[a-z0-9][a-z0-9._-]*$' || die "unsafe project id: $1"
+}
+
+field_value() {
+  local file=$1 key=$2
+  awk -v key="$key" '
+    function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
+    function clean(s) { s = trim(s); gsub(/^"|"$/, "", s); return s }
+    $0 ~ "^[[:space:]]*" key ":[[:space:]]*" {
+      value = $0
+      sub("^[[:space:]]*" key ":[[:space:]]*", "", value)
+      print clean(value)
+      exit
+    }
+  ' "$file"
+}
+
+project_exists() {
+  [ -f "$MEMORY_REGISTRY_ROOT/projects/$1.yml" ]
+}
+
+remote_slug() {
+  local url slug
+  url=$(git -C "$MEMORY_REPO_ROOT" remote get-url origin 2>/dev/null || true)
+  if [ -n "$url" ]; then
+    case "$url" in
+      git@*:*) slug=${url#*:} ;;
+      https://*/*/*|http://*/*/*) slug=${url#*://*/} ;;
+      *) slug=$url ;;
+    esac
+    slug=${slug%.git}
+    printf '%s\n' "$slug"
+    return 0
+  fi
+  basename "$MEMORY_REPO_ROOT"
+}
+
+project=""
+new_project=""
+name=""
+kind=""
+description=""
+role=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --project) project=${2:-}; shift 2 ;;
+    --new-project) new_project=${2:-}; shift 2 ;;
+    --name) name=${2:-}; shift 2 ;;
+    --kind) kind=${2:-}; shift 2 ;;
+    --description) description=${2:-}; shift 2 ;;
+    --role) role=${2:-}; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "unknown argument: $1" ;;
+  esac
+done
+
+[ -z "$project" ] || [ -z "$new_project" ] || die "choose --project or --new-project, not both"
+[ -n "$project" ] || [ -n "$new_project" ] || { usage; exit 2; }
+
+target_project="${project:-$new_project}"
+validate_project_id "$target_project"
+
+if [ -n "$project" ]; then
+  project_exists "$project" || die "unknown project: $project"
+else
+  [ -n "$name" ] || die "--name is required for --new-project"
+  [ -n "$kind" ] || die "--kind is required for --new-project"
+  [ -n "$description" ] || die "--description is required for --new-project"
+  ! project_exists "$new_project" || die "project already exists: $new_project"
+fi
+
+repo_slug=$(remote_slug)
+repo_file_slug=$(printf '%s' "$repo_slug" | sed -E 's|[^A-Za-z0-9._-]+|-|g; s/^-+//; s/-+$//')
+[ -n "$role" ] || role="Repository context for $repo_slug"
+
+project_file="$MEMORY_REGISTRY_ROOT/projects/$target_project.yml"
+repo_file="$MEMORY_REGISTRY_ROOT/repositories/$repo_file_slug.yml"
+
+if [ -f "$repo_file" ]; then
+  existing_project="$(field_value "$repo_file" project || true)"
+  if [ "$existing_project" = "$target_project" ]; then
+    printf 'memory-project-register: repo already maps to project %s\n' "$target_project"
+    exit 0
+  fi
+  die "repository file already exists and maps to ${existing_project:-unknown}: ${repo_file#"$MEMORY_REPO_ROOT"/}"
+fi
+
+if [ -n "$new_project" ]; then
+  mkdir -p "$MEMORY_REGISTRY_ROOT/projects" "$MEMORY_CONTEXT_ROOT/records/projects/$new_project" "$MEMORY_CONTEXT_ROOT/wiki/projects/$new_project"
+  {
+    printf 'id: %s\n' "$new_project"
+    printf 'name: %s\n' "$(yaml_quote "$name")"
+    printf 'status: active\n'
+    printf 'kind: %s\n' "$(yaml_quote "$kind")"
+    printf 'description: %s\n' "$(yaml_quote "$description")"
+  } > "$project_file"
+fi
+
+mkdir -p "$MEMORY_REGISTRY_ROOT/repositories"
+{
+  printf 'slug: %s\n' "$repo_slug"
+  printf 'project: %s\n' "$target_project"
+  printf 'role: %s\n' "$(yaml_quote "$role")"
+} > "$repo_file"
+
+"$SCRIPT_DIR/memory-project" --validate >/dev/null
+printf 'memory-project-register: registered %s -> %s\n' "$repo_slug" "$target_project"
