@@ -9,6 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Run tests if present
         run: |
           chmod +x bin/memory-* tests/*.sh 2>/dev/null || true
@@ -17,3 +19,16 @@ jobs:
         run: |
           chmod +x bin/memory-*
           bin/memory-verify
+      - name: Validate memory commit metadata
+        run: |
+          chmod +x bin/memory-*
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          else
+            if [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
+              range="${{ github.sha }}"
+            else
+              range="${{ github.event.before }}..${{ github.sha }}"
+            fi
+          fi
+          bin/memory-commit-policy-check --range "$range"
