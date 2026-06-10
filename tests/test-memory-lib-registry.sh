@@ -25,6 +25,16 @@ assert_contains "$project_files" "context/registry/messengers/channels/general.y
 destinations=$("$repo/bin/memory-lib-registry" project-destinations team-memory)
 assert_contains "$destinations" "general"
 
+cat > "$repo/context/registry/repositories/alias-order.yml" <<'EOF_ALIAS_ORDER'
+slug: alias-order
+aliases:
+  - owner/alias-order
+project: team-memory
+EOF_ALIAS_ORDER
+alias_order=$("$repo/bin/memory-lib-registry" resolve-repo owner/alias-order)
+assert_contains "$alias_order" "MEMORY_REGISTRY_PROJECT='team-memory'"
+assert_contains "$alias_order" "MEMORY_REGISTRY_MATCH='alias'"
+
 assert_success "$repo/bin/memory-lib-registry" validate
 
 cat > "$repo/context/registry/repositories/duplicate.yml" <<'EOF_DUP'
