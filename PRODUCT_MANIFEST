@@ -4,6 +4,7 @@ PRODUCT_MANIFEST
 VERSION
 setup
 bin/memory-commit-policy-check
+bin/memory-dashboard
 bin/memory-ingest
 bin/memory-init
 bin/memory-lib-product
@@ -21,6 +22,7 @@ bin/memory-sync
 bin/memory-upgrade
 bin/memory-verify
 bin/memory-wiki
+skills/tm-dashboard/
 skills/tm-guide/
 skills/tm-ingest/
 skills/tm-load/
