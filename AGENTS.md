@@ -15,7 +15,7 @@ copied internal context.
 
 ## Implementation Rules
 
-- Keep runtime dependency-light: Bash + Git + ripgrep.
+- Keep runtime dependency-light: Bash + Git + ripgrep + jq.
 - Keep all helper commands prefixed with `memory-`.
 - Keep all skill directories and skill names prefixed with `tm-`.
 - Verification is part of the happy path, not an optional cleanup.

@@ -17,6 +17,14 @@ assert_contains() {
   printf '%s\n' "$haystack" | grep -Fq "$needle" || fail "expected output to contain '$needle'"
 }
 
+assert_not_contains() {
+  haystack=$1
+  needle=$2
+  if printf '%s\n' "$haystack" | grep -Fq "$needle"; then
+    fail "expected output not to contain '$needle'"
+  fi
+}
+
 assert_file_exists() {
   [ -f "$1" ] || fail "expected file to exist: $1"
 }

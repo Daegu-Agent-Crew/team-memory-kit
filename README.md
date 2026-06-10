@@ -71,6 +71,8 @@ CLI commands use the explicit `memory-*` prefix. Agent skills use the shorter
 
 ## Commands
 
+Requirements: Bash, Git, ripgrep (`rg`), and `jq`.
+
 - `memory-init`: creates a private team memory repo from the template.
 - `memory-setup`: checks dependencies, member allowlist, and registry shape.
 - `memory-status`: prints runtime paths, resolved project, verification, Git status, and recent context.
@@ -80,6 +82,7 @@ CLI commands use the explicit `memory-*` prefix. Agent skills use the shorter
 - `memory-load`: prints registry, wiki, and recent record pointers for agents.
 - `memory-ingest`: creates append-only source records.
 - `memory-wiki`: regenerates cited project wiki context from records.
+- `memory-dashboard`: generates explicitly public dashboard JSON.
 - `memory-secret-scan`: scans for obvious credentials and team denylist markers.
 - `memory-verify`: validates records, members, registry, citations, and safety.
 - `memory-lib-registry`: reads and validates project, repository, and messenger registry files.
@@ -98,6 +101,17 @@ bin/memory-sync --project team-memory --member your-github-username --push
 
 `memory-sync` writes `MEMORY_VERSION` and commit trailers. It refuses unrelated
 staged files and dirty team-memory files outside the selected sync plan.
+
+Dashboard export is opt-in per record:
+
+```yaml
+visibility: public
+dashboard_body: true
+```
+
+`memory-dashboard` exports only records with `visibility: public` or
+`dashboard: true`. `visibility: private` always excludes a record. Body and
+timeline summary text require `dashboard_body: true`.
 
 ## Model
 

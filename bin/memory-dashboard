@@ -8,12 +8,18 @@ usage() {
   cat <<'USAGE'
 Usage: memory-dashboard [--output PATH]
 
-Generates a dashboard.json from all project records, wiki summaries,
-member registry, and decision logs. Output is a single JSON file suitable
-for a static dashboard page.
+Generates dashboard JSON from explicitly public project records, wiki summaries,
+member registry, task records, and decision records.
 
-Records with 'visibility: private' are excluded from the public output.
+Only records with 'visibility: public' or 'dashboard: true' are exported.
+'visibility: private' always wins and is never exported. Record bodies and
+timeline summaries are included only when 'dashboard_body: true' is present.
 USAGE
+}
+
+die() {
+  printf 'memory-dashboard: %s\n' "$*" >&2
+  exit 1
 }
 
 output=""
@@ -21,7 +27,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --output)
       output=${2:-}
-      [ -n "$output" ] || { printf 'memory-dashboard: --output needs a value\n' >&2; exit 1; }
+      [ -n "$output" ] || die "--output needs a value"
       shift 2
       ;;
     -h|--help)
@@ -29,27 +35,36 @@ while [ "$#" -gt 0 ]; do
       exit 0
       ;;
     *)
-      printf 'memory-dashboard: unknown argument: %s\n' "$1" >&2
-      exit 1
+      die "unknown argument: $1"
       ;;
   esac
 done
 
+command -v jq >/dev/null 2>&1 || die "missing jq. Fix: install jq and retry."
+
 frontmatter_value() {
   local key=$1 file=$2
-  awk -F': ' -v key="$key" '
-    $1 == key {
-      value=$0
-      sub("^[^:]+:[[:space:]]*", "", value)
-      gsub(/^"/, "", value)
-      gsub(/"$/, "", value)
-      print value
+  awk -v key="$key" '
+    function trim(s) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+      return s
+    }
+    function clean(s) {
+      s = trim(s)
+      gsub(/^"|"$/, "", s)
+      return s
+    }
+    $0 ~ "^[[:space:]]*" key ":[[:space:]]*" {
+      value = $0
+      sub("^[[:space:]]*" key ":[[:space:]]*", "", value)
+      print clean(value)
+      found = 1
       exit
     }
+    END { exit(found ? 0 : 1) }
   ' "$file"
 }
 
-# Extract body (everything after the closing --- of frontmatter)
 body_text() {
   local file=$1
   awk '
@@ -60,65 +75,126 @@ body_text() {
   ' "$file"
 }
 
-# Collect members
-members_json="[]"
-if [ -f "$MEMORY_MEMBER_FILE" ]; then
-  members_json=$(awk '
+body_summary() {
+  local file=$1
+  body_text "$file" | awk 'NR <= 5 { print }'
+}
+
+record_is_dashboard_public() {
+  local file=$1 visibility dashboard
+  visibility=$(frontmatter_value visibility "$file" 2>/dev/null || true)
+  dashboard=$(frontmatter_value dashboard "$file" 2>/dev/null || true)
+
+  [ "$visibility" = "private" ] && return 1
+  [ "$visibility" = "public" ] || [ "$dashboard" = "true" ]
+}
+
+record_body_text() {
+  local file=$1 dashboard_body
+  dashboard_body=$(frontmatter_value dashboard_body "$file" 2>/dev/null || true)
+
+  if [ "$dashboard_body" = "true" ]; then
+    body_text "$file"
+  fi
+}
+
+record_summary_text() {
+  local file=$1 dashboard_body
+  dashboard_body=$(frontmatter_value dashboard_body "$file" 2>/dev/null || true)
+
+  if [ "$dashboard_body" = "true" ]; then
+    body_summary "$file"
+  fi
+}
+
+emit_members_json() {
+  if [ ! -f "$MEMORY_MEMBER_FILE" ]; then
+    printf '[]\n'
+    return
+  fi
+
+  awk '
     /^[[:space:]]*-[[:space:]]*/ {
-      value=$0
+      value = $0
       sub(/^[[:space:]]*-[[:space:]]*/, "", value)
       gsub(/[[:space:]]+$/, "", value)
       if (value != "") print value
     }
-  ' "$MEMORY_MEMBER_FILE" | jq -R -s 'split("\n") | map(select(length > 0))')
-fi
+  ' "$MEMORY_MEMBER_FILE" | jq -R -s 'split("\n") | map(select(length > 0))'
+}
 
-# Collect projects
-projects_json="[]"
-if [ -d "$MEMORY_REGISTRY_ROOT/projects" ]; then
-  projects_json=$(
-    for f in "$MEMORY_REGISTRY_ROOT/projects"/*.yml; do
-      [ -f "$f" ] || continue
-      id=$(frontmatter_value id "$f" 2>/dev/null || basename "$f" .yml)
-      name=$(frontmatter_value name "$f" 2>/dev/null || echo "")
-      status=$(frontmatter_value status "$f" 2>/dev/null || echo "active")
-      kind=$(frontmatter_value kind "$f" 2>/dev/null || echo "")
-      desc=$(frontmatter_value description "$f" 2>/dev/null || echo "")
-      jq -n \
-        --arg id "$id" \
-        --arg name "$name" \
-        --arg status "$status" \
-        --arg kind "$kind" \
-        --arg description "$desc" \
-        '{id: $id, name: $name, status: $status, kind: $kind, description: $description}'
-    done | jq -s '.'
-  )
-fi
+emit_projects_json() {
+  if [ ! -d "$MEMORY_REGISTRY_ROOT/projects" ]; then
+    printf '[]\n'
+    return
+  fi
 
-# Collect repositories
-repos_json="[]"
-if [ -d "$MEMORY_REGISTRY_ROOT/repositories" ]; then
-  repos_json=$(
-    for f in "$MEMORY_REGISTRY_ROOT/repositories"/*.yml; do
-      [ -f "$f" ] || continue
-      slug=$(frontmatter_value slug "$f" 2>/dev/null || basename "$f" .yml)
-      project=$(frontmatter_value project "$f" 2>/dev/null || echo "")
-      role=$(frontmatter_value role "$f" 2>/dev/null || echo "")
-      url=$(frontmatter_value url "$f" 2>/dev/null || echo "")
-      jq -n \
-        --arg slug "$slug" \
-        --arg project "$project" \
-        --arg role "$role" \
-        --arg url "$url" \
-        '{slug: $slug, project: $project, role: $role, url: $url}'
-    done | jq -s '.'
-  )
-fi
+  for f in "$MEMORY_REGISTRY_ROOT/projects"/*.yml; do
+    [ -f "$f" ] || continue
+    id=$(frontmatter_value id "$f" 2>/dev/null || basename "$f" .yml)
+    name=$(frontmatter_value name "$f" 2>/dev/null || echo "")
+    status=$(frontmatter_value status "$f" 2>/dev/null || echo "active")
+    kind=$(frontmatter_value kind "$f" 2>/dev/null || echo "")
+    description=$(frontmatter_value description "$f" 2>/dev/null || echo "")
+    jq -n \
+      --arg id "$id" \
+      --arg name "$name" \
+      --arg status "$status" \
+      --arg kind "$kind" \
+      --arg description "$description" \
+      '{id: $id, name: $name, status: $status, kind: $kind, description: $description}'
+  done | jq -s '.'
+}
 
-# Collect public records grouped by project (skip visibility: private)
-records_by_project="{}"
-timeline_json="[]"
-if [ -d "$MEMORY_CONTEXT_ROOT/records/projects" ]; then
+emit_repositories_json() {
+  if [ ! -d "$MEMORY_REGISTRY_ROOT/repositories" ]; then
+    printf '[]\n'
+    return
+  fi
+
+  for f in "$MEMORY_REGISTRY_ROOT/repositories"/*.yml; do
+    [ -f "$f" ] || continue
+    slug=$(frontmatter_value slug "$f" 2>/dev/null || basename "$f" .yml)
+    project=$(frontmatter_value project "$f" 2>/dev/null || echo "")
+    role=$(frontmatter_value role "$f" 2>/dev/null || echo "")
+    url=$(frontmatter_value url "$f" 2>/dev/null || echo "")
+    jq -n \
+      --arg slug "$slug" \
+      --arg project "$project" \
+      --arg role "$role" \
+      --arg url "$url" \
+      '{slug: $slug, project: $project, role: $role, url: $url}'
+  done | jq -s '.'
+}
+
+emit_record_json() {
+  local rec=$1 title date_val member source_type rec_status rel body
+  title=$(frontmatter_value title "$rec" 2>/dev/null || basename "$rec" .md)
+  date_val=$(frontmatter_value date "$rec" 2>/dev/null || echo "")
+  member=$(frontmatter_value member "$rec" 2>/dev/null || echo "")
+  source_type=$(frontmatter_value source_type "$rec" 2>/dev/null || echo "")
+  rec_status=$(frontmatter_value status "$rec" 2>/dev/null || echo "")
+  rel=${rec#"$MEMORY_REPO_ROOT"/}
+  body=$(record_body_text "$rec")
+  jq -n \
+    --arg title "$title" \
+    --arg date "$date_val" \
+    --arg member "$member" \
+    --arg source_type "$source_type" \
+    --arg status "$rec_status" \
+    --arg path "$rel" \
+    --arg body "$body" \
+    '{title: $title, date: $date, member: $member, source_type: $source_type, status: $status, path: $path, body: $body}'
+}
+
+emit_records_by_project_json() {
+  local records_by_project="{}" proj_dir proj proj_records
+
+  if [ ! -d "$MEMORY_CONTEXT_ROOT/records/projects" ]; then
+    printf '{}\n'
+    return
+  fi
+
   for proj_dir in "$MEMORY_CONTEXT_ROOT/records/projects"/*/; do
     [ -d "$proj_dir" ] || continue
     proj=$(basename "$proj_dir")
@@ -126,140 +202,142 @@ if [ -d "$MEMORY_CONTEXT_ROOT/records/projects" ]; then
     proj_records=$(
       for rec in "$proj_dir"*.md; do
         [ -f "$rec" ] || continue
-        vis=$(frontmatter_value visibility "$rec" 2>/dev/null || echo "")
-        [ "$vis" = "private" ] && continue
-        title=$(frontmatter_value title "$rec" 2>/dev/null || basename "$rec" .md)
-        date_val=$(frontmatter_value date "$rec" 2>/dev/null || echo "")
-        member=$(frontmatter_value member "$rec" 2>/dev/null || echo "")
-        source_type=$(frontmatter_value source_type "$rec" 2>/dev/null || echo "")
-        rec_status=$(frontmatter_value status "$rec" 2>/dev/null || echo "")
-        body=$(body_text "$rec" | jq -Rs '.')
-        rel=${rec#"$MEMORY_REPO_ROOT"/}
-        jq -n \
-          --arg title "$title" \
-          --arg date "$date_val" \
-          --arg member "$member" \
-          --arg source_type "$source_type" \
-          --arg status "$rec_status" \
-          --arg path "$rel" \
-          --argjson body "$body" \
-          '{title: $title, date: $date, member: $member, source_type: $source_type, status: $status, path: $path, body: $body}'
+        record_is_dashboard_public "$rec" || continue
+        emit_record_json "$rec"
       done | jq -s '.'
     )
-    records_by_project=$(echo "$records_by_project" | jq --arg proj "$proj" --argjson recs "$proj_records" '. + {($proj): $recs}')
+    records_by_project=$(printf '%s\n' "$records_by_project" | jq --arg proj "$proj" --argjson recs "$proj_records" '. + {($proj): $recs}')
   done
 
-  # Build timeline from all public records
-  timeline_json=$(
-    find "$MEMORY_CONTEXT_ROOT/records/projects" -type f -name '*.md' 2>/dev/null | sort | while IFS= read -r rec; do
-      vis=$(frontmatter_value visibility "$rec" 2>/dev/null || echo "")
-      [ "$vis" = "private" ] && continue
-      title=$(frontmatter_value title "$rec" 2>/dev/null || basename "$rec" .md)
-      date_val=$(frontmatter_value date "$rec" 2>/dev/null || echo "")
-      member=$(frontmatter_value member "$rec" 2>/dev/null || echo "")
-      source_type=$(frontmatter_value source_type "$rec" 2>/dev/null || echo "")
-      project=$(frontmatter_value project "$rec" 2>/dev/null || echo "")
-      body=$(body_text "$rec" | head -5 | jq -Rs '.')
-      rel=${rec#"$MEMORY_REPO_ROOT"/}
-      jq -n \
-        --arg title "$title" \
-        --arg date "$date_val" \
-        --arg member "$member" \
-        --arg source_type "$source_type" \
-        --arg project "$project" \
-        --arg path "$rel" \
-        --argjson summary "$body" \
-        '{title: $title, date: $date, member: $member, source_type: $source_type, project: $project, path: $path, summary: $summary}'
-    done | jq -s 'sort_by(.date) | reverse'
-  )
-fi
+  printf '%s\n' "$records_by_project"
+}
 
-# Extract tasks from records that have task_phase frontmatter
-tasks_json="[]"
-if [ -d "$MEMORY_CONTEXT_ROOT/records/projects" ]; then
-  tasks_json=$(
-    find "$MEMORY_CONTEXT_ROOT/records/projects" -type f -name '*.md' 2>/dev/null | sort | while IFS= read -r rec; do
-      phase=$(frontmatter_value task_phase "$rec" 2>/dev/null || echo "")
-      [ -z "$phase" ] && continue
-      vis=$(frontmatter_value visibility "$rec" 2>/dev/null || echo "")
-      [ "$vis" = "private" ] && continue
-      title=$(frontmatter_value title "$rec" 2>/dev/null || basename "$rec" .md)
-      date_val=$(frontmatter_value date "$rec" 2>/dev/null || echo "")
-      member=$(frontmatter_value member "$rec" 2>/dev/null || echo "")
-      project=$(frontmatter_value project "$rec" 2>/dev/null || echo "")
-      task_status=$(frontmatter_value task_status "$rec" 2>/dev/null || echo "pending")
-      milestone=$(frontmatter_value milestone "$rec" 2>/dev/null || echo "")
-      assignee=$(frontmatter_value assignee "$rec" 2>/dev/null || "$member")
-      due=$(frontmatter_value due "$rec" 2>/dev/null || echo "")
-      rel=${rec#"$MEMORY_REPO_ROOT"/}
-      jq -n \
-        --arg title "$title" \
-        --arg date "$date_val" \
-        --arg project "$project" \
-        --arg phase "$phase" \
-        --arg status "$task_status" \
-        --arg milestone "$milestone" \
-        --arg assignee "$assignee" \
-        --arg due "$due" \
-        --arg path "$rel" \
-        '{title: $title, date: $date, project: $project, phase: $phase, status: $status, milestone: $milestone, assignee: $assignee, due: $due, path: $path}'
-    done | jq -s '.'
-  )
-fi
+emit_timeline_json() {
+  if [ ! -d "$MEMORY_CONTEXT_ROOT/records/projects" ]; then
+    printf '[]\n'
+    return
+  fi
 
-# Extract decisions with body
-decisions_json="[]"
-if [ -d "$MEMORY_CONTEXT_ROOT/records/projects" ]; then
-  decisions_json=$(
-    find "$MEMORY_CONTEXT_ROOT/records/projects" -type f -name '*.md' 2>/dev/null | sort | while IFS= read -r rec; do
-      dec_status=$(frontmatter_value decision_status "$rec" 2>/dev/null || echo "")
-      [ -z "$dec_status" ] && continue
-      vis=$(frontmatter_value visibility "$rec" 2>/dev/null || echo "")
-      [ "$vis" = "private" ] && continue
-      title=$(frontmatter_value title "$rec" 2>/dev/null || basename "$rec" .md)
-      date_val=$(frontmatter_value date "$rec" 2>/dev/null || echo "")
-      member=$(frontmatter_value member "$rec" 2>/dev/null || echo "")
-      project=$(frontmatter_value project "$rec" 2>/dev/null || echo "")
-      body=$(body_text "$rec" | jq -Rs '.')
-      rel=${rec#"$MEMORY_REPO_ROOT"/}
-      jq -n \
-        --arg title "$title" \
-        --arg date "$date_val" \
-        --arg member "$member" \
-        --arg project "$project" \
-        --arg status "$dec_status" \
-        --arg path "$rel" \
-        --argjson body "$body" \
-        '{title: $title, date: $date, member: $member, project: $project, status: $status, path: $path, body: $body}'
-    done | jq -s '.'
-  )
-fi
+  find "$MEMORY_CONTEXT_ROOT/records/projects" -type f -name '*.md' 2>/dev/null | sort | while IFS= read -r rec; do
+    record_is_dashboard_public "$rec" || continue
+    title=$(frontmatter_value title "$rec" 2>/dev/null || basename "$rec" .md)
+    date_val=$(frontmatter_value date "$rec" 2>/dev/null || echo "")
+    member=$(frontmatter_value member "$rec" 2>/dev/null || echo "")
+    source_type=$(frontmatter_value source_type "$rec" 2>/dev/null || echo "")
+    project=$(frontmatter_value project "$rec" 2>/dev/null || echo "")
+    rel=${rec#"$MEMORY_REPO_ROOT"/}
+    summary=$(record_summary_text "$rec")
+    jq -n \
+      --arg title "$title" \
+      --arg date "$date_val" \
+      --arg member "$member" \
+      --arg source_type "$source_type" \
+      --arg project "$project" \
+      --arg path "$rel" \
+      --arg summary "$summary" \
+      '{title: $title, date: $date, member: $member, source_type: $source_type, project: $project, path: $path, summary: $summary}'
+  done | jq -s 'sort_by(.date) | reverse'
+}
 
-# Build wiki summaries per project
-wiki_json="{}"
-if [ -d "$MEMORY_CONTEXT_ROOT/wiki/projects" ]; then
+emit_tasks_json() {
+  if [ ! -d "$MEMORY_CONTEXT_ROOT/records/projects" ]; then
+    printf '[]\n'
+    return
+  fi
+
+  find "$MEMORY_CONTEXT_ROOT/records/projects" -type f -name '*.md' 2>/dev/null | sort | while IFS= read -r rec; do
+    record_is_dashboard_public "$rec" || continue
+    phase=$(frontmatter_value task_phase "$rec" 2>/dev/null || echo "")
+    [ -n "$phase" ] || continue
+    title=$(frontmatter_value title "$rec" 2>/dev/null || basename "$rec" .md)
+    date_val=$(frontmatter_value date "$rec" 2>/dev/null || echo "")
+    member=$(frontmatter_value member "$rec" 2>/dev/null || echo "")
+    project=$(frontmatter_value project "$rec" 2>/dev/null || echo "")
+    task_status=$(frontmatter_value task_status "$rec" 2>/dev/null || echo "pending")
+    milestone=$(frontmatter_value milestone "$rec" 2>/dev/null || echo "")
+    assignee=$(frontmatter_value assignee "$rec" 2>/dev/null || printf '%s\n' "$member")
+    due=$(frontmatter_value due "$rec" 2>/dev/null || echo "")
+    rel=${rec#"$MEMORY_REPO_ROOT"/}
+    jq -n \
+      --arg title "$title" \
+      --arg date "$date_val" \
+      --arg project "$project" \
+      --arg phase "$phase" \
+      --arg status "$task_status" \
+      --arg milestone "$milestone" \
+      --arg assignee "$assignee" \
+      --arg due "$due" \
+      --arg path "$rel" \
+      '{title: $title, date: $date, project: $project, phase: $phase, status: $status, milestone: $milestone, assignee: $assignee, due: $due, path: $path}'
+  done | jq -s '.'
+}
+
+emit_decisions_json() {
+  if [ ! -d "$MEMORY_CONTEXT_ROOT/records/projects" ]; then
+    printf '[]\n'
+    return
+  fi
+
+  find "$MEMORY_CONTEXT_ROOT/records/projects" -type f -name '*.md' 2>/dev/null | sort | while IFS= read -r rec; do
+    record_is_dashboard_public "$rec" || continue
+    dec_status=$(frontmatter_value decision_status "$rec" 2>/dev/null || echo "")
+    [ -n "$dec_status" ] || continue
+    title=$(frontmatter_value title "$rec" 2>/dev/null || basename "$rec" .md)
+    date_val=$(frontmatter_value date "$rec" 2>/dev/null || echo "")
+    member=$(frontmatter_value member "$rec" 2>/dev/null || echo "")
+    project=$(frontmatter_value project "$rec" 2>/dev/null || echo "")
+    rel=${rec#"$MEMORY_REPO_ROOT"/}
+    body=$(record_body_text "$rec")
+    jq -n \
+      --arg title "$title" \
+      --arg date "$date_val" \
+      --arg member "$member" \
+      --arg project "$project" \
+      --arg status "$dec_status" \
+      --arg path "$rel" \
+      --arg body "$body" \
+      '{title: $title, date: $date, member: $member, project: $project, status: $status, path: $path, body: $body}'
+  done | jq -s '.'
+}
+
+emit_wiki_json() {
+  local wiki_json="{}" wiki_file proj content
+
+  if [ ! -d "$MEMORY_CONTEXT_ROOT/wiki/projects" ]; then
+    printf '{}\n'
+    return
+  fi
+
   for wiki_file in "$MEMORY_CONTEXT_ROOT/wiki/projects"/*/current-context.md; do
     [ -f "$wiki_file" ] || continue
     proj=$(basename "$(dirname "$wiki_file")")
-    content=$(cat "$wiki_file" | jq -Rs '.')
-    wiki_json=$(echo "$wiki_json" | jq --arg proj "$proj" --argjson content "$content" '. + {($proj): $content}')
+    content=$(< "$wiki_file")
+    wiki_json=$(printf '%s\n' "$wiki_json" | jq --arg proj "$proj" --arg content "$content" '. + {($proj): $content}')
   done
-fi
 
-# Generate timestamp
+  printf '%s\n' "$wiki_json"
+}
+
 generated=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+members_json=$(emit_members_json)
+projects_json=$(emit_projects_json)
+repositories_json=$(emit_repositories_json)
+records_by_project_json=$(emit_records_by_project_json)
+timeline_json=$(emit_timeline_json)
+tasks_json=$(emit_tasks_json)
+decisions_json=$(emit_decisions_json)
+wiki_json=$(emit_wiki_json)
 
-# Assemble final JSON
 result=$(jq -n \
+  --arg generated "$generated" \
   --argjson members "$members_json" \
   --argjson projects "$projects_json" \
-  --argjson repositories "$repos_json" \
-  --argjson records_by_project "$records_by_project" \
+  --argjson repositories "$repositories_json" \
+  --argjson records_by_project "$records_by_project_json" \
   --argjson timeline "$timeline_json" \
   --argjson tasks "$tasks_json" \
   --argjson decisions "$decisions_json" \
   --argjson wiki "$wiki_json" \
-  --arg generated "$generated" \
   '{
     generated: $generated,
     members: $members,
@@ -272,7 +350,6 @@ result=$(jq -n \
     wiki: $wiki
   }')
 
-# Output
 if [ -n "$output" ]; then
   mkdir -p "$(dirname "$output")"
   printf '%s\n' "$result" > "$output"
