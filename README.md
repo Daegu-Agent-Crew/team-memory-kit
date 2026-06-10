@@ -21,6 +21,10 @@ memory-load -> memory-ingest -> memory-wiki -> memory-verify -> memory-sync -> m
   on the same day. `memory-init` copies this file into generated team memory
   repos so operators can see which kit version produced the installed helpers,
   skills, and template.
+- `PRODUCT_MANIFEST`: product-owned files that `memory-init` and
+  `memory-upgrade` copy into generated team memory repos. This keeps install and
+  upgrade surfaces identical and lets upgrades prune stale `memory-*` helpers or
+  `tm-*` skills safely.
 - `MEMORY_VERSION`: generated private repo snapshot metadata. `memory-sync`
   writes it when committing team memory updates, including the snapshot time,
   responsible member, sync mode, and sync scope. It is memory state, not product
@@ -86,7 +90,7 @@ CLI commands use the explicit `memory-*` prefix. Agent skills use the shorter
 ## Commands
 
 - `memory-init`: creates a private team memory repo from the template.
-- `memory-upgrade`: refreshes generated repo helpers, skills, setup, and `VERSION` from a newer kit checkout.
+- `memory-upgrade`: refreshes generated repo product files from `PRODUCT_MANIFEST` in a newer kit checkout.
 - `memory-setup`: checks dependencies, member allowlist, and registry shape.
 - `memory-status`: prints runtime paths, resolved project, verification, Git status, and recent context.
 - `memory-project`: resolves the current Git repo to a memory project.

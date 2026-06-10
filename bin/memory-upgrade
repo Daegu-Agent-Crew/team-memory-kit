@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 DEFAULT_SOURCE=$(cd "$SCRIPT_DIR/.." && pwd)
+PRODUCT_COMMAND=memory-upgrade
+source "$SCRIPT_DIR/memory-lib-product"
 
 source_root=${TEAM_MEMORY_KIT_ROOT:-"$DEFAULT_SOURCE"}
 dry_run=0
@@ -13,7 +15,7 @@ usage() {
 Usage: memory-upgrade [--source <kit-repo>] [--dry-run] <team-memory-repo>
 
 Upgrades product-owned team-memory-kit files in a private team memory repo:
-VERSION, setup, bin/memory-*, and skills/tm-*.
+PRODUCT_MANIFEST, VERSION, setup, bin/memory-*, and skills/tm-*.
 
 It does not touch context/, MEMORY_VERSION, member allowlists, registries, or
 share drafts. Run from a team-memory-kit checkout, or pass --source when running
@@ -84,19 +86,20 @@ target_root=$(canonical_dir "$target") || die "target team memory repo does not 
 
 [ "$source_root" != "$target_root" ] || die "source and target are the same. Run from a team-memory-kit checkout or pass --source <kit-repo>."
 [ -f "$source_root/VERSION" ] || die "source is missing VERSION: $source_root"
+[ -f "$source_root/PRODUCT_MANIFEST" ] || die "source is missing PRODUCT_MANIFEST: $source_root"
 [ -d "$source_root/bin" ] || die "source is missing bin/: $source_root"
 [ -d "$source_root/skills" ] || die "source is missing skills/: $source_root"
 [ -f "$source_root/setup" ] || die "source is missing setup: $source_root"
 [ -f "$target_root/MEMORY_VERSION" ] || die "target does not look like a private team memory repo; missing MEMORY_VERSION: $target_root"
 [ -d "$target_root/context" ] || die "target does not look like a private team memory repo; missing context/: $target_root"
 
-shopt -s nullglob
-helper_files=("$source_root"/bin/memory-*)
-skill_dirs=("$source_root"/skills/tm-*)
-shopt -u nullglob
+manifest_tmp=$(mktemp "${TMPDIR:-/tmp}/memory-upgrade-manifest.XXXXXX")
+stale_tmp=$(mktemp "${TMPDIR:-/tmp}/memory-upgrade-stale.XXXXXX")
+trap 'rm -f "$manifest_tmp" "$stale_tmp"' EXIT
 
-[ "${#helper_files[@]}" -gt 0 ] || die "source has no bin/memory-* helpers"
-[ "${#skill_dirs[@]}" -gt 0 ] || die "source has no skills/tm-* skills"
+product_manifest_entries "$source_root" > "$manifest_tmp"
+product_require_manifest_sources "$source_root" "$manifest_tmp"
+product_stale_entries "$target_root" "$manifest_tmp" | sort -u > "$stale_tmp"
 
 source_version=$(version_value "$source_root/VERSION")
 target_version=$(version_value "$target_root/VERSION")
@@ -108,14 +111,9 @@ printf 'memory-upgrade: source VERSION=%s\n' "$source_version"
 
 if [ "$dry_run" -eq 1 ]; then
   printf '\nWould update:\n'
-  printf '%s\n' '- VERSION'
-  printf '%s\n' '- setup'
-  for helper in "${helper_files[@]}"; do
-    printf -- '- bin/%s\n' "$(basename "$helper")"
-  done
-  for skill in "${skill_dirs[@]}"; do
-    printf -- '- skills/%s/\n' "$(basename "$skill")"
-  done
+  sed 's/^/- /' "$manifest_tmp"
+  printf '\nWould prune stale product files:\n'
+  if [ -s "$stale_tmp" ]; then sed 's/^/- /' "$stale_tmp"; else printf '%s\n' '- none'; fi
   printf '\nWould not touch:\n'
   printf '%s\n' '- context/'
   printf '%s\n' '- MEMORY_VERSION'
@@ -123,19 +121,8 @@ if [ "$dry_run" -eq 1 ]; then
   exit 0
 fi
 
-mkdir -p "$target_root/bin" "$target_root/skills"
-cp "$source_root/VERSION" "$target_root/VERSION"
-cp "$source_root/setup" "$target_root/setup"
-
-for helper in "${helper_files[@]}"; do
-  cp "$helper" "$target_root/bin/$(basename "$helper")"
-done
-
-for skill in "${skill_dirs[@]}"; do
-  name=$(basename "$skill")
-  rm -rf "$target_root/skills/$name"
-  cp -R "$skill" "$target_root/skills/$name"
-done
+product_copy_manifest_entries "$source_root" "$target_root" "$manifest_tmp"
+product_prune_stale_entries "$target_root" "$stale_tmp"
 
 chmod +x "$target_root"/bin/memory-* "$target_root/setup"
 

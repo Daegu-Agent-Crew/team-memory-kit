@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+
+PRODUCT_COMMAND=${PRODUCT_COMMAND:-memory-lib-product}
+
+product_die() {
+  printf '%s: %s\n' "$PRODUCT_COMMAND" "$*" >&2
+  exit 1
+}
+
+product_validate_entry() {
+  entry=$1
+  case "$entry" in
+    ""|.|..|/*|../*|*/../*|*//*) product_die "unsafe PRODUCT_MANIFEST entry: $entry" ;;
+  esac
+}
+
+product_manifest_entries() {
+  root=$1
+  manifest="$root/PRODUCT_MANIFEST"
+  [ -f "$manifest" ] || product_die "missing PRODUCT_MANIFEST in source kit: $root"
+
+  while IFS= read -r raw || [ -n "$raw" ]; do
+    entry=${raw%%#*}
+    entry=$(printf '%s' "$entry" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+    [ -n "$entry" ] || continue
+    product_validate_entry "$entry"
+    printf '%s\n' "$entry"
+  done < "$manifest"
+}
+
+product_source_entry_exists() {
+  root=$1
+  entry=$2
+  case "$entry" in
+    */) [ -d "$root/${entry%/}" ] ;;
+    *) [ -f "$root/$entry" ] ;;
+  esac
+}
+
+product_require_manifest_sources() {
+  root=$1
+  entries_file=$2
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    product_source_entry_exists "$root" "$entry" || product_die "manifest entry missing from source: $entry"
+  done < "$entries_file"
+}
+
+product_atomic_replace() {
+  source_path=$1
+  target_path=$2
+  is_dir=$3
+  parent=$(dirname "$target_path")
+  base=$(basename "$target_path")
+  tmp="$parent/.${base}.tmp.$$"
+  backup="$parent/.${base}.backup.$$"
+
+  mkdir -p "$parent"
+  rm -rf "$tmp" "$backup"
+
+  if [ "$is_dir" = "1" ]; then
+    cp -R "$source_path" "$tmp"
+  else
+    cp "$source_path" "$tmp"
+  fi
+
+  if [ -e "$target_path" ] || [ -L "$target_path" ]; then
+    mv "$target_path" "$backup"
+  fi
+
+  if ! mv "$tmp" "$target_path"; then
+    if [ -e "$backup" ] || [ -L "$backup" ]; then
+      mv "$backup" "$target_path"
+    fi
+    rm -rf "$tmp"
+    product_die "failed to replace product file: ${target_path}"
+  fi
+
+  rm -rf "$backup"
+}
+
+product_copy_manifest_entry() {
+  source_root=$1
+  target_root=$2
+  entry=$3
+  product_validate_entry "$entry"
+
+  case "$entry" in
+    */)
+      rel=${entry%/}
+      [ -d "$source_root/$rel" ] || product_die "manifest directory missing from source: $entry"
+      product_atomic_replace "$source_root/$rel" "$target_root/$rel" 1
+      ;;
+    *)
+      [ -f "$source_root/$entry" ] || product_die "manifest file missing from source: $entry"
+      product_atomic_replace "$source_root/$entry" "$target_root/$entry" 0
+      ;;
+  esac
+}
+
+product_copy_manifest_entries() {
+  source_root=$1
+  target_root=$2
+  entries_file=$3
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    product_copy_manifest_entry "$source_root" "$target_root" "$entry"
+  done < "$entries_file"
+}
+
+product_entry_in_manifest() {
+  entries_file=$1
+  entry=$2
+  grep -Fxq "$entry" "$entries_file"
+}
+
+product_stale_entries() {
+  target_root=$1
+  entries_file=$2
+
+  shopt -s nullglob
+  for helper in "$target_root"/bin/memory-*; do
+    rel="bin/$(basename "$helper")"
+    product_entry_in_manifest "$entries_file" "$rel" || printf '%s\n' "$rel"
+  done
+  for skill in "$target_root"/skills/tm-*; do
+    rel="skills/$(basename "$skill")/"
+    product_entry_in_manifest "$entries_file" "$rel" || printf '%s\n' "$rel"
+  done
+  shopt -u nullglob
+}
+
+product_prune_stale_entries() {
+  target_root=$1
+  stale_file=$2
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    product_validate_entry "$entry"
+    case "$entry" in
+      bin/memory-*|skills/tm-*/) ;;
+      *) product_die "refusing to prune non-product path: $entry" ;;
+    esac
+    rm -rf "$target_root/${entry%/}"
+  done < "$stale_file"
+}

@@ -12,7 +12,8 @@ Use this as the human-facing upgrade workflow. People should invoke `/tm-upgrade
 
 1. Locate the source `team-memory-kit` checkout. Prefer an explicit user-provided
    path, then `TEAM_MEMORY_KIT_ROOT`, then the current repo if it contains
-   `VERSION`, `bin/`, `skills/`, and `templates/team-memory-repo/`.
+   `PRODUCT_MANIFEST`, `VERSION`, `bin/`, `skills/`, and
+   `templates/team-memory-repo/`.
 2. Locate the target private team memory repo. Usually this is the current repo
    if it contains `MEMORY_VERSION` and `context/`.
 3. Run a dry-run first:
@@ -38,7 +39,9 @@ Use this as the human-facing upgrade workflow. People should invoke `/tm-upgrade
 
 ## Guardrails
 
-- Upgrade only `VERSION`, `setup`, `bin/memory-*`, and `skills/tm-*`.
+- Upgrade only paths listed in `PRODUCT_MANIFEST`.
+- Stale `bin/memory-*` helpers and `skills/tm-*` skills are product-owned and
+  may be pruned when they are no longer listed in `PRODUCT_MANIFEST`.
 - Do not edit `context/`, `MEMORY_VERSION`, registries, member allowlists, or
   share drafts as part of an upgrade.
 - Do not push. Use `tm-sync` after the user reviews the local changes.

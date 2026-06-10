@@ -1,0 +1,31 @@
+# Product-owned files copied into generated private team memory repos.
+# Directory entries end with / and are replaced as a unit during upgrade.
+PRODUCT_MANIFEST
+VERSION
+setup
+bin/memory-commit-policy-check
+bin/memory-ingest
+bin/memory-init
+bin/memory-lib-product
+bin/memory-lib-registry
+bin/memory-link-context
+bin/memory-load
+bin/memory-paths
+bin/memory-project
+bin/memory-project-register
+bin/memory-secret-scan
+bin/memory-setup
+bin/memory-share-plan
+bin/memory-status
+bin/memory-sync
+bin/memory-upgrade
+bin/memory-verify
+bin/memory-wiki
+skills/tm-guide/
+skills/tm-ingest/
+skills/tm-load/
+skills/tm-setup/
+skills/tm-share/
+skills/tm-sync/
+skills/tm-upgrade/
+skills/tm-wiki/
