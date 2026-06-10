@@ -17,6 +17,7 @@ check_cmd() {
 
 check_cmd git
 check_cmd rg
+check_cmd jq
 
 if [ -d "$MEMORY_CONTEXT_ROOT" ]; then
   printf 'ok: context root exists: %s\n' "${MEMORY_CONTEXT_ROOT#"$MEMORY_REPO_ROOT"/}"
