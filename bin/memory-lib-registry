@@ -1,0 +1,381 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+eval "$("$SCRIPT_DIR/memory-paths")"
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage:
+  memory-lib-registry project-ids
+  memory-lib-registry repo-entries
+  memory-lib-registry resolve-repo <repo-slug>
+  memory-lib-registry project-files <project-id>
+  memory-lib-registry project-destinations <project-id>
+  memory-lib-registry validate
+USAGE
+}
+
+quote_sh() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+clean_scalar() {
+  value=$1
+  value=${value#"${value%%[![:space:]]*}"}
+  value=${value%"${value##*[![:space:]]}"}
+  value=${value#\"}
+  value=${value%\"}
+  value=${value#\'}
+  value=${value%\'}
+  printf '%s' "$value"
+}
+
+field_value() {
+  file=$1
+  key=$2
+  awk -v key="$key" '
+    function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
+    function clean(s) { s = trim(s); gsub(/^"|"$/, "", s); gsub(/^'"'"'|'"'"'$/, "", s); return s }
+    $0 ~ "^[[:space:]]*" key ":[[:space:]]*" {
+      value = $0
+      sub("^[[:space:]]*" key ":[[:space:]]*", "", value)
+      print clean(value)
+      exit
+    }
+  ' "$file"
+}
+
+field_value_from_stdin() {
+  key=$1
+  awk -v key="$key" '
+    function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
+    function clean(s) { s = trim(s); gsub(/^"|"$/, "", s); gsub(/^'"'"'|'"'"'$/, "", s); return s }
+    $0 ~ "^[[:space:]]*" key ":[[:space:]]*" {
+      value = $0
+      sub("^[[:space:]]*" key ":[[:space:]]*", "", value)
+      print clean(value)
+      exit
+    }
+  '
+}
+
+field_line() {
+  file=$1
+  key=$2
+  awk -v key="$key" '$0 ~ "^[[:space:]]*" key ":[[:space:]]*" { print NR; exit }' "$file"
+}
+
+rel_repo_path() {
+  file=$1
+  case "$file" in
+    "$MEMORY_REPO_ROOT"/*) printf '%s\n' "${file#$MEMORY_REPO_ROOT/}" ;;
+    *) printf '%s\n' "$file" ;;
+  esac
+}
+
+context_path() {
+  rel=$1
+  case "$rel" in
+    /*) printf '%s\n' "$rel" ;;
+    context/*) printf '%s/%s\n' "$MEMORY_REPO_ROOT" "$rel" ;;
+    *) printf '%s/%s\n' "$MEMORY_CONTEXT_ROOT" "$rel" ;;
+  esac
+}
+
+deleted_registry_files() {
+  {
+    git -C "$MEMORY_REPO_ROOT" diff --name-only --diff-filter=D -- context/registry 2>/dev/null || true
+    git -C "$MEMORY_REPO_ROOT" diff --cached --name-only --diff-filter=D -- context/registry 2>/dev/null || true
+    git -C "$MEMORY_REPO_ROOT" ls-files --deleted -- context/registry 2>/dev/null || true
+  } | sort -u
+}
+
+deleted_file_project() {
+  rel=$1
+  git -C "$MEMORY_REPO_ROOT" show "HEAD:$rel" 2>/dev/null | field_value_from_stdin project
+}
+
+project_entries() {
+  for file in "$MEMORY_REGISTRY_ROOT"/projects/*.yml; do
+    [ -f "$file" ] || continue
+    id=$(field_value "$file" id || true)
+    [ -n "$id" ] || continue
+    line=$(field_line "$file" id || true)
+    printf '%s\t%s\t%s\n' "$file" "$id" "${line:-1}"
+  done
+}
+
+project_ids() {
+  project_entries | awk -F '\t' '{ print $2 }'
+}
+
+repo_entries() {
+  for file in "$MEMORY_REGISTRY_ROOT"/repositories/*.yml; do
+    [ -f "$file" ] || continue
+    slug=""
+    project=""
+    in_aliases=0
+    alias_count=0
+    aliases_tmp=$(mktemp "${MEMORY_TMP_ROOT}/memory-repo-aliases.XXXXXX")
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in
+        slug:*)
+          slug=$(clean_scalar "${line#slug:}")
+          in_aliases=0
+          ;;
+        project:*)
+          project=$(clean_scalar "${line#project:}")
+          in_aliases=0
+          ;;
+        aliases:*)
+          in_aliases=1
+          ;;
+        "  - "*|"- "*)
+          if [ "$in_aliases" = "1" ]; then
+            alias=$(clean_scalar "${line#*- }")
+            alias_count=$((alias_count + 1))
+            [ -n "$alias" ] && printf '%s\t%s\n' "$alias_count" "$alias" >> "$aliases_tmp"
+          fi
+          ;;
+        *)
+          in_aliases=0
+          ;;
+      esac
+    done < "$file"
+    resolved_project=${project:-$slug}
+    if [ -n "$slug" ] && [ -n "$resolved_project" ]; then
+      while IFS="$(printf '\t')" read -r alias_line alias; do
+        [ -n "${alias:-}" ] || continue
+        printf '1\talias\t%s\t%s\t%s:%s\n' "$alias" "$resolved_project" "$file" "${alias_line:-1}"
+      done < "$aliases_tmp"
+      printf '1\tslug\t%s\t%s\t%s:%s\n' "$slug" "$resolved_project" "$file" "1"
+    fi
+    rm -f "$aliases_tmp"
+  done
+}
+
+resolve_repo() {
+  slug=${1:?Missing repo slug}
+  match_line=$(repo_entries | awk -F '\t' -v slug="$slug" '
+    $3 == slug && $2 == "slug" && slug_match == "" { slug_match = $0; next }
+    $3 == slug && $2 == "alias" && alias_match == "" { alias_match = $0 }
+    END {
+      if (slug_match != "") print slug_match
+      else if (alias_match != "") print alias_match
+    }
+  ')
+  [ -n "$match_line" ] || return 1
+  IFS="$(printf '\t')" read -r _entry match_type match_value project _line <<EOF_MATCH
+$match_line
+EOF_MATCH
+  printf 'MEMORY_REGISTRY_PROJECT=%s\n' "$(quote_sh "$project")"
+  printf 'MEMORY_REGISTRY_MATCH=%s\n' "$(quote_sh "$match_type")"
+  printf 'MEMORY_REGISTRY_MATCH_VALUE=%s\n' "$(quote_sh "$match_value")"
+}
+
+channel_entries() {
+  for file in "$MEMORY_REGISTRY_ROOT"/messengers/channels/*.yml; do
+    [ -f "$file" ] || continue
+    name=$(field_value "$file" name || true)
+    project=$(field_value "$file" project || true)
+    kind=$(field_value "$file" kind || true)
+    line=$(field_line "$file" name || true)
+    [ -n "$name" ] && [ -n "$project" ] || continue
+    printf '%s\t%s\t%s\t%s\t%s\n' "$file" "$name" "$project" "${kind:-messenger}" "${line:-1}"
+  done
+}
+
+project_files() {
+  project=${1:?Missing project id}
+  tmp=$(mktemp "${MEMORY_TMP_ROOT}/memory-project-files.XXXXXX")
+  trap 'rm -f "$tmp"' RETURN
+
+  project_file="$MEMORY_REGISTRY_ROOT/projects/$project.yml"
+  [ -f "$project_file" ] && rel_repo_path "$project_file" >> "$tmp"
+
+  for file in "$MEMORY_REGISTRY_ROOT"/repositories/*.yml; do
+    [ -f "$file" ] || continue
+    [ "$(field_value "$file" project || true)" = "$project" ] && rel_repo_path "$file" >> "$tmp"
+  done
+
+  for file in "$MEMORY_REGISTRY_ROOT"/messengers/channels/*.yml; do
+    [ -f "$file" ] || continue
+    [ "$(field_value "$file" project || true)" = "$project" ] && rel_repo_path "$file" >> "$tmp"
+  done
+
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    if [ "$rel" = "context/registry/projects/$project.yml" ]; then
+      printf '%s\n' "$rel" >> "$tmp"
+      continue
+    fi
+    case "$rel" in
+      context/registry/repositories/*.yml|context/registry/messengers/channels/*.yml)
+        deleted_project=$(deleted_file_project "$rel" 2>/dev/null || true)
+        [ "$deleted_project" = "$project" ] && printf '%s\n' "$rel" >> "$tmp"
+        ;;
+    esac
+  done < <(deleted_registry_files)
+
+  sort -u "$tmp"
+  rm -f "$tmp"
+}
+
+project_destinations() {
+  project=${1:?Missing project id}
+  if ! project_ids | grep -Fxq "$project"; then
+    printf 'memory-lib-registry: unknown project: %s\n' "$project" >&2
+    return 4
+  fi
+  channel_entries | awk -F '\t' -v project="$project" '$3 == project { print $2 "\t" $4 "\t" $1 }' | sort
+}
+
+validate() {
+  errors=0
+  projects_tmp=$(mktemp "${MEMORY_TMP_ROOT}/memory-projects.XXXXXX")
+  project_entries_tmp=$(mktemp "${MEMORY_TMP_ROOT}/memory-project-entries.XXXXXX")
+  repos_tmp=$(mktemp "${MEMORY_TMP_ROOT}/memory-repos.XXXXXX")
+  channels_tmp=$(mktemp "${MEMORY_TMP_ROOT}/memory-channels.XXXXXX")
+  trap 'rm -f "$projects_tmp" "$project_entries_tmp" "$repos_tmp" "$channels_tmp"' RETURN
+
+  project_entries > "$project_entries_tmp"
+  awk -F '\t' '{ print $2 }' "$project_entries_tmp" > "$projects_tmp"
+  repo_entries > "$repos_tmp"
+  channel_entries > "$channels_tmp"
+
+  if [ ! -s "$projects_tmp" ]; then
+    echo "memory-lib-registry: no projects found in registry" >&2
+    errors=1
+  fi
+
+  awk -F '\t' '
+    {
+      if (seen[$2] != "") {
+        printf "%s:%s: duplicate project id '\''%s'\'' also defined at %s\n", $1, $3, $2, seen[$2] > "/dev/stderr"
+        errors = 1
+      } else {
+        seen[$2] = $1 ":" $3
+      }
+    }
+    END { exit errors }
+  ' "$project_entries_tmp" || errors=1
+
+  for file in "$MEMORY_REGISTRY_ROOT"/projects/*.yml; do
+    [ -f "$file" ] || continue
+    id=$(field_value "$file" id || true)
+    base=$(basename "$file" .yml)
+    if [ -z "$id" ]; then
+      echo "$file:1: project file is missing required field 'id'" >&2
+      errors=1
+    elif [ "$id" != "$base" ]; then
+      echo "$file:1: project filename '$base' does not match id '$id'" >&2
+      errors=1
+    fi
+  done
+
+  while IFS="$(printf '\t')" read -r _entry _kind key project line; do
+    [ -n "${key:-}" ] || continue
+    if ! grep -Fxq "$project" "$projects_tmp"; then
+      echo "$line: repository key '$key' references unknown project '$project'" >&2
+      errors=1
+    fi
+  done < "$repos_tmp"
+
+  awk -F '\t' '
+    {
+      key = $3
+      if (seen[key] != "") {
+        printf "%s: registry key '\''%s'\'' collides with earlier %s\n", $5, key, seen[key] > "/dev/stderr"
+        errors = 1
+      } else {
+        seen[key] = $2 " at " $5
+      }
+    }
+    END { exit errors }
+  ' "$repos_tmp" || errors=1
+
+  for file in "$MEMORY_REGISTRY_ROOT"/repositories/*.yml; do
+    [ -f "$file" ] || continue
+    slug=$(field_value "$file" slug || true)
+    project=$(field_value "$file" project || true)
+    base=$(basename "$file" .yml)
+    safe_slug=$(printf '%s' "$slug" | sed -E 's|[^A-Za-z0-9._-]+|-|g; s/^-+//; s/-+$//')
+    if [ -z "$slug" ]; then
+      echo "$file:1: repository file is missing required field 'slug'" >&2
+      errors=1
+    elif [ "$safe_slug" != "$base" ]; then
+      echo "$file:1: repository filename '$base' does not match slug '$slug'" >&2
+      errors=1
+    fi
+    if [ -z "$project" ]; then
+      echo "$file:1: repository file is missing required field 'project'" >&2
+      errors=1
+    fi
+  done
+
+  while IFS="$(printf '\t')" read -r file name project _kind line; do
+    [ -n "${name:-}" ] || continue
+    if ! grep -Fxq "$project" "$projects_tmp"; then
+      echo "$file:$line: destination '$name' references unknown project '$project'" >&2
+      errors=1
+    fi
+  done < "$channels_tmp"
+
+  awk -F '\t' '
+    {
+      name = $2
+      if (seen[name] != "") {
+        printf "%s:%s: destination '\''%s'\'' collides with earlier %s\n", $1, $5, name, seen[name] > "/dev/stderr"
+        errors = 1
+      } else {
+        seen[name] = $1 ":" $5
+      }
+    }
+    END { exit errors }
+  ' "$channels_tmp" || errors=1
+
+  for file in "$MEMORY_REGISTRY_ROOT"/messengers/channels/*.yml; do
+    [ -f "$file" ] || continue
+    name=$(field_value "$file" name || true)
+    project=$(field_value "$file" project || true)
+    base=$(basename "$file" .yml)
+    if [ -z "$name" ]; then
+      echo "$file:1: destination file is missing required field 'name'" >&2
+      errors=1
+    elif [ "$name" != "$base" ]; then
+      echo "$file:1: destination filename '$base' does not match name '$name'" >&2
+      errors=1
+    fi
+    if [ -z "$project" ]; then
+      echo "$file:1: destination file is missing required field 'project'" >&2
+      errors=1
+    fi
+  done
+
+  rm -f "$projects_tmp" "$project_entries_tmp" "$repos_tmp" "$channels_tmp"
+  [ "$errors" -eq 0 ]
+}
+
+case "${1:-}" in
+  project-ids) shift; project_ids ;;
+  repo-entries) shift; repo_entries ;;
+  resolve-repo)
+    shift
+    [ "$#" -eq 1 ] || { usage; exit 2; }
+    resolve_repo "$1"
+    ;;
+  project-files)
+    shift
+    [ "$#" -eq 1 ] || { usage; exit 2; }
+    project_files "$1"
+    ;;
+  project-destinations)
+    shift
+    [ "$#" -eq 1 ] || { usage; exit 2; }
+    project_destinations "$1"
+    ;;
+  validate) shift; validate ;;
+  -h|--help) usage ;;
+  *) usage; exit 2 ;;
+esac

@@ -66,58 +66,6 @@ remote_slug() {
   basename "$MEMORY_REPO_ROOT"
 }
 
-project_exists() {
-  [ -f "$MEMORY_REGISTRY_ROOT/projects/$1.yml" ]
-}
-
-emit_mappings() {
-  local file slug project in_aliases line alias
-  find "$MEMORY_REGISTRY_ROOT/repositories" -type f -name '*.yml' 2>/dev/null | sort | while IFS= read -r file; do
-    slug=""
-    project=""
-    in_aliases=0
-    while IFS= read -r line || [ -n "$line" ]; do
-      case "$line" in
-        slug:*)
-          slug=${line#slug:}
-          slug=${slug#"${slug%%[![:space:]]*}"}
-          slug=${slug%"${slug##*[![:space:]]}"}
-          slug=${slug#\"}
-          slug=${slug%\"}
-          in_aliases=0
-          ;;
-        project:*)
-          project=${line#project:}
-          project=${project#"${project%%[![:space:]]*}"}
-          project=${project%"${project##*[![:space:]]}"}
-          project=${project#\"}
-          project=${project%\"}
-          in_aliases=0
-          ;;
-        aliases:*)
-          in_aliases=1
-          ;;
-        "  - "*|"- "*)
-          if [ "$in_aliases" = "1" ]; then
-            alias=${line#*- }
-            alias=${alias#"${alias%%[![:space:]]*}"}
-            alias=${alias%"${alias##*[![:space:]]}"}
-            alias=${alias#\"}
-            alias=${alias%\"}
-            [ -n "$alias" ] && printf '%s|%s|alias|%s\n' "$alias" "${project:-$slug}" "$file"
-          fi
-          ;;
-        *)
-          in_aliases=0
-          ;;
-      esac
-    done < "$file"
-    [ -n "$slug" ] || die "repository registry missing slug: ${file#"$MEMORY_REPO_ROOT"/}"
-    [ -n "${project:-$slug}" ] || die "repository registry missing project: ${file#"$MEMORY_REPO_ROOT"/}"
-    printf '%s|%s|slug|%s\n' "$slug" "${project:-$slug}" "$file"
-  done
-}
-
 if [ -n "${TEAM_MEMORY_PROJECT:-}" ]; then
   if [ "$validate_only" = "1" ]; then
     printf 'registry ok\n'
@@ -134,29 +82,8 @@ if [ -n "${TEAM_MEMORY_PROJECT:-}" ]; then
   exit 0
 fi
 
-tmp=$(mktemp "${MEMORY_TMP_ROOT}/memory-project.XXXXXX")
-trap 'rm -f "$tmp"' EXIT
-emit_mappings > "$tmp"
-
-if [ ! -s "$tmp" ]; then
-  die "no repository registry files found. Fix: add context/registry/repositories/<repo>.yml."
-fi
-
-errors=0
-while IFS='|' read -r key project _match _file; do
-  [ -n "$key" ] || continue
-  count=$(awk -F'|' -v k="$key" '$1 == k { print $2 }' "$tmp" | sort -u | wc -l | tr -d ' ')
-  if [ "$count" -gt 1 ]; then
-    printf 'memory-project: alias maps to multiple projects: %s\n' "$key" >&2
-    errors=$((errors + 1))
-  fi
-  if ! project_exists "$project"; then
-    printf 'memory-project: project metadata missing for %s\n' "$project" >&2
-    errors=$((errors + 1))
-  fi
-done < "$tmp"
-
-if [ "$errors" -gt 0 ]; then
+if ! "$SCRIPT_DIR/memory-lib-registry" validate >/dev/null; then
+  "$SCRIPT_DIR/memory-lib-registry" validate >&2 || true
   exit 1
 fi
 
@@ -168,18 +95,13 @@ fi
 target=${repo_arg:-$(remote_slug)}
 [ -n "$target" ] || die "could not determine repository slug. Fix: set origin or pass --repo owner/name."
 
-match=$(awk -F'|' -v k="$target" '$1 == k { print $0 }' "$tmp" | sort -u)
-if [ -z "$match" ]; then
+resolved=$("$SCRIPT_DIR/memory-lib-registry" resolve-repo "$target" 2>/dev/null || true)
+if [ -z "$resolved" ]; then
   die "project unresolved for repo '$target'. Fix: add registry metadata or pass TEAM_MEMORY_PROJECT after explicit user confirmation."
 fi
-
-projects=$(printf '%s\n' "$match" | awk -F'|' '{ print $2 }' | sort -u)
-if [ "$(printf '%s\n' "$projects" | wc -l | tr -d ' ')" -gt 1 ]; then
-  die "project ambiguous for repo '$target'. Fix duplicate registry aliases."
-fi
-
-project=$(printf '%s\n' "$match" | awk -F'|' 'NR == 1 { print $2 }')
-match_type=$(printf '%s\n' "$match" | awk -F'|' 'NR == 1 { print $3 }')
+eval "$resolved"
+project=$MEMORY_REGISTRY_PROJECT
+match_type=$MEMORY_REGISTRY_MATCH
 
 if [ "$shell_output" = "1" ]; then
   printf 'MEMORY_PROJECT=%s\n' "$(quote_sh "$project")"

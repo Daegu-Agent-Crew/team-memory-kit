@@ -44,7 +44,7 @@ for dir in "$MEMORY_CONTEXT_ROOT" "$MEMORY_REGISTRY_ROOT" "$MEMORY_CONTEXT_ROOT/
 done
 
 "$SCRIPT_DIR/memory-secret-scan" >/dev/null || fail "secret/privacy scan failed"
-"$SCRIPT_DIR/memory-project" --validate >/dev/null || fail "registry validation failed"
+"$SCRIPT_DIR/memory-lib-registry" validate >/dev/null || fail "registry validation failed"
 
 if [ ! -f "$MEMORY_MEMBER_FILE" ]; then
   fail "member allowlist missing: ${MEMORY_MEMBER_FILE#"$MEMORY_REPO_ROOT"/}"

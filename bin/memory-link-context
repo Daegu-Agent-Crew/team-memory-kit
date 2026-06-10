@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+eval "$("$SCRIPT_DIR/memory-paths")"
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: memory-link-context [--project <id>] [--repo-root <path>] [--dry-run] [--no-exclude]
+
+Creates a visible local symlink mirror at:
+  <repo-root>/team-memory-context/<project>/
+USAGE
+}
+
+project=""
+repo_root_arg=""
+dry_run=0
+no_exclude=0
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --project) project=${2:?Missing value for --project}; shift 2 ;;
+    --project=*) project=${1#--project=}; shift ;;
+    --repo-root) repo_root_arg=${2:?Missing value for --repo-root}; shift 2 ;;
+    --repo-root=*) repo_root_arg=${1#--repo-root=}; shift ;;
+    --dry-run) dry_run=1; shift ;;
+    --no-exclude) no_exclude=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) printf 'memory-link-context: unknown argument: %s\n' "$1" >&2; usage; exit 2 ;;
+  esac
+done
+
+if [ -z "$project" ]; then
+  project=$("$SCRIPT_DIR/memory-project")
+fi
+
+case "$project" in
+  ""|*/*|.*|*..*)
+    printf 'memory-link-context: unsafe project id: %s\n' "$project" >&2
+    exit 2
+    ;;
+esac
+
+if ! "$SCRIPT_DIR/memory-lib-registry" project-ids | grep -Fxq "$project"; then
+  printf 'memory-link-context: unknown project: %s\n' "$project" >&2
+  exit 4
+fi
+
+repo_root=${repo_root_arg:-$MEMORY_REPO_ROOT}
+[ -d "$repo_root" ] || {
+  printf 'memory-link-context: repo root does not exist: %s\n' "$repo_root" >&2
+  exit 2
+}
+repo_root=$(cd "$repo_root" >/dev/null 2>&1 && pwd -P)
+mirror_root="$repo_root/team-memory-context/$project"
+
+say() {
+  printf '%s\n' "$*"
+}
+
+would() {
+  [ "$dry_run" -eq 1 ] && say "dry-run: $*"
+}
+
+ensure_dir() {
+  dir=$1
+  if [ "$dry_run" -eq 1 ]; then
+    [ -d "$dir" ] || would "mkdir -p $dir"
+  else
+    mkdir -p "$dir"
+  fi
+}
+
+link_file() {
+  src=$1
+  dst=$2
+  [ -f "$src" ] || return 0
+
+  if [ -L "$dst" ]; then
+    current=$(readlink "$dst" 2>/dev/null || true)
+    if [ "$current" = "$src" ]; then
+      return 0
+    fi
+    printf 'memory-link-context: refusing to overwrite symlink with different target: %s\n' "$dst" >&2
+    printf 'memory-link-context: existing target: %s\n' "$current" >&2
+    printf 'memory-link-context: desired target: %s\n' "$src" >&2
+    exit 5
+  elif [ -e "$dst" ]; then
+    printf 'memory-link-context: refusing to overwrite existing path: %s\n' "$dst" >&2
+    exit 5
+  fi
+
+  ensure_dir "$(dirname "$dst")"
+  if [ "$dry_run" -eq 1 ]; then
+    would "ln -s $src $dst"
+  else
+    ln -s "$src" "$dst"
+  fi
+}
+
+write_readme() {
+  readme="$mirror_root/README.md"
+  content="# Team Memory Context: $project
+
+This folder is a local live symlink mirror of team memory context for project \`$project\`.
+
+Files here point at \`$MEMORY_CONTEXT_ROOT\`. Saving through this folder edits
+the original team memory context.
+
+Prefer \`memory-ingest\`, \`memory-wiki\`, and \`memory-sync\` for durable updates.
+"
+  if [ -L "$readme" ]; then
+    printf 'memory-link-context: refusing to overwrite symlink: %s\n' "$readme" >&2
+    exit 5
+  fi
+  if [ -e "$readme" ]; then
+    existing=$(cat "$readme" 2>/dev/null || true)
+    if [ "$existing" = "$content" ]; then
+      return 0
+    fi
+    case "$existing" in
+      "# Team Memory Context: "*) ;;
+      *)
+        printf 'memory-link-context: refusing to overwrite existing README: %s\n' "$readme" >&2
+        exit 5
+        ;;
+    esac
+  fi
+  ensure_dir "$(dirname "$readme")"
+  if [ "$dry_run" -eq 1 ]; then
+    would "write $readme"
+  else
+    printf '%s' "$content" > "$readme"
+  fi
+}
+
+mirror_tree() {
+  src_dir=$1
+  dst_dir=$2
+  [ -d "$src_dir" ] || return 0
+  find "$src_dir" -type f | sort | while IFS= read -r src; do
+    rel=${src#$src_dir/}
+    link_file "$src" "$dst_dir/$rel"
+  done
+}
+
+add_exclude() {
+  [ "$no_exclude" -eq 0 ] || return 0
+  exclude=$(git -C "$repo_root" rev-parse --git-path info/exclude 2>/dev/null || true)
+  [ -n "$exclude" ] || return 0
+  case "$exclude" in
+    /*) ;;
+    *) exclude="$repo_root/$exclude" ;;
+  esac
+  if [ -f "$exclude" ] && grep -Fxq "/team-memory-context/" "$exclude"; then
+    return 0
+  fi
+  if [ "$dry_run" -eq 1 ]; then
+    would "append /team-memory-context/ to $exclude"
+  else
+    mkdir -p "$(dirname "$exclude")"
+    printf '%s\n' "/team-memory-context/" >> "$exclude"
+  fi
+}
+
+ensure_dir "$mirror_root/wiki"
+ensure_dir "$mirror_root/records"
+ensure_dir "$mirror_root/registry"
+write_readme
+mirror_tree "$MEMORY_CONTEXT_ROOT/wiki/projects/$project" "$mirror_root/wiki"
+mirror_tree "$MEMORY_CONTEXT_ROOT/records/projects/$project" "$mirror_root/records"
+
+"$SCRIPT_DIR/memory-lib-registry" project-files "$project" | while IFS= read -r rel; do
+  [ -n "$rel" ] || continue
+  case "$rel" in
+    context/registry/*)
+      src="$MEMORY_REPO_ROOT/$rel"
+      dst="$mirror_root/registry/${rel#context/registry/}"
+      link_file "$src" "$dst"
+      ;;
+  esac
+done
+
+add_exclude
+
+if [ "$dry_run" -eq 1 ]; then
+  say "memory-link-context: dry-run complete for $project at $mirror_root"
+else
+  say "memory-link-context: linked $project context at $mirror_root"
+fi

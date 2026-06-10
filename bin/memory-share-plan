@@ -86,16 +86,11 @@ printf 'Title: %s\n' "$title"
 [ -n "$github_base" ] && [ -n "$commit_sha" ] && printf 'Commit URL: %s/commit/%s\n' "$github_base" "$commit_sha"
 printf '\n## Destination Candidates\n'
 channel_count=0
-while IFS= read -r channel; do
-  [ -n "$channel" ] || continue
-  name=$(awk -F': ' '$1 == "name" { print $2; exit }' "$channel")
-  kind=$(awk -F': ' '$1 == "kind" { print $2; exit }' "$channel")
-  channel_project=$(awk -F': ' '$1 == "project" { print $2; exit }' "$channel")
-  if [ "$channel_project" = "$project" ]; then
-    printf -- '- %s (%s)\n' "${name:-${channel##*/}}" "${kind:-messenger}"
-    channel_count=$((channel_count + 1))
-  fi
-done < <(find "$MEMORY_REGISTRY_ROOT/messengers/channels" -type f -name '*.yml' 2>/dev/null | sort)
+while IFS="$(printf '\t')" read -r name kind _file; do
+  [ -n "${name:-}" ] || continue
+  printf -- '- %s (%s)\n' "$name" "${kind:-messenger}"
+  channel_count=$((channel_count + 1))
+done < <("$SCRIPT_DIR/memory-lib-registry" project-destinations "$project" 2>/dev/null || true)
 [ "$channel_count" -gt 0 ] || printf -- '- none configured. Add context/registry/messengers/channels/<name>.yml.\n'
 
 printf '\n## Source Files\n'
