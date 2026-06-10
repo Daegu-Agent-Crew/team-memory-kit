@@ -19,13 +19,13 @@ Use this as the human-facing upgrade workflow. People should invoke `/tm-upgrade
 3. Run a dry-run first:
 
    ```bash
-   bin/memory-upgrade --source <kit-repo> --dry-run <team-memory-repo>
+   <kit-repo>/bin/memory-upgrade --source <kit-repo> --dry-run <team-memory-repo>
    ```
 
 4. If the plan only updates product-owned files, apply it:
 
    ```bash
-   bin/memory-upgrade --source <kit-repo> <team-memory-repo>
+   <kit-repo>/bin/memory-upgrade --source <kit-repo> <team-memory-repo>
    ```
 
 5. Inspect status:
