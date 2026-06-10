@@ -8,6 +8,24 @@ The daily loop:
 memory-load -> memory-ingest -> memory-wiki -> memory-verify -> memory-sync -> memory-share-plan
 ```
 
+## Versioning
+
+This repo has two version files:
+
+- `VERSION`: the `team-memory-kit` tool/schema release used to generate or
+  refresh this repo. It follows CalVer `YYYY.MM.DD.N`.
+- `PRODUCT_MANIFEST`: the product-owned helper, skill, setup, and version files
+  managed by `memory-init` and `memory-upgrade`.
+- `MEMORY_VERSION`: the latest committed memory snapshot metadata. It is written
+  by `memory-sync` and records the responsible GitHub member, sync time, mode,
+  and scope.
+
+Use `bin/memory-status` to inspect both during release or support checks.
+
+When a newer `team-memory-kit` release is available, use `/tm-upgrade` from an
+agent session. It refreshes installed helpers and skills without touching
+private memory records or registries.
+
 ## First Setup
 
 Requirements: Bash, Git, ripgrep (`rg`), and `jq`.

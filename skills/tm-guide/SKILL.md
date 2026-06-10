@@ -26,6 +26,7 @@ Route:
 - Check safety and citations: `memory-verify`
 - Inspect runtime/project state: `memory-status`
 - Create a local context mirror: `memory-link-context`
+- Upgrade installed helpers and skills: `tm-upgrade`
 - Sync team memory with Git: `tm-sync`
 - Validate memory commit metadata: `memory-commit-policy-check`
 - Draft messenger announcement: `tm-share`

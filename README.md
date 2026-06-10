@@ -12,6 +12,24 @@ The core loop:
 memory-load -> memory-ingest -> memory-wiki -> memory-verify -> memory-sync -> memory-share-plan
 ```
 
+## Versioning
+
+`team-memory-kit` uses two version files:
+
+- `VERSION`: tool and schema release version for this kit. It uses date-based
+  CalVer in `YYYY.MM.DD.N` format. Increment `N` when shipping multiple releases
+  on the same day. `memory-init` copies this file into generated team memory
+  repos so operators can see which kit version produced the installed helpers,
+  skills, and template.
+- `PRODUCT_MANIFEST`: product-owned files that `memory-init` and
+  `memory-upgrade` copy into generated team memory repos. This keeps install and
+  upgrade surfaces identical and lets upgrades prune stale `memory-*` helpers or
+  `tm-*` skills safely.
+- `MEMORY_VERSION`: generated private repo snapshot metadata. `memory-sync`
+  writes it when committing team memory updates, including the snapshot time,
+  responsible member, sync mode, and sync scope. It is memory state, not product
+  release state.
+
 ## Quickstart
 
 Create a private, self-contained team memory repo:
@@ -74,6 +92,7 @@ CLI commands use the explicit `memory-*` prefix. Agent skills use the shorter
 Requirements: Bash, Git, ripgrep (`rg`), and `jq`.
 
 - `memory-init`: creates a private team memory repo from the template.
+- `memory-upgrade`: refreshes generated repo product files from `PRODUCT_MANIFEST` in a newer kit checkout.
 - `memory-setup`: checks dependencies, member allowlist, and registry shape.
 - `memory-status`: prints runtime paths, resolved project, verification, Git status, and recent context.
 - `memory-project`: resolves the current Git repo to a memory project.
@@ -101,6 +120,14 @@ bin/memory-sync --project team-memory --member your-github-username --push
 
 `memory-sync` writes `MEMORY_VERSION` and commit trailers. It refuses unrelated
 staged files and dirty team-memory files outside the selected sync plan.
+
+`memory-status` prints both `TEAM_MEMORY_KIT_VERSION` and `MEMORY_VERSION_*`
+metadata so a team can distinguish installed tool/schema version from latest
+memory snapshot metadata during support or release checks.
+
+Use `/tm-upgrade` to apply a newer kit release to an existing private team
+memory repo. The skill runs `memory-upgrade` so people do not need to call the
+helper directly.
 
 Dashboard export is opt-in per record:
 
