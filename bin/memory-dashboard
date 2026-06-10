@@ -1,0 +1,233 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+eval "$("$SCRIPT_DIR/memory-paths")"
+
+usage() {
+  cat <<'USAGE'
+Usage: memory-dashboard [--output PATH]
+
+Generates a dashboard.json from all project records, wiki summaries,
+member registry, and decision logs. Output is a single JSON file suitable
+for a static dashboard page.
+USAGE
+}
+
+output=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output)
+      output=${2:-}
+      [ -n "$output" ] || { printf 'memory-dashboard: --output needs a value\n' >&2; exit 1; }
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      printf 'memory-dashboard: unknown argument: %s\n' "$1" >&2
+      exit 1
+      ;;
+  esac
+done
+
+frontmatter_value() {
+  local key=$1 file=$2
+  awk -F': ' -v key="$key" '
+    $1 == key {
+      value=$0
+      sub("^[^:]+:[[:space:]]*", "", value)
+      gsub(/^"/, "", value)
+      gsub(/"$/, "", value)
+      print value
+      exit
+    }
+  ' "$file"
+}
+
+# Collect members
+members_json="[]"
+if [ -f "$MEMORY_MEMBER_FILE" ]; then
+  members_json=$(awk '
+    /^[[:space:]]*-[[:space:]]*/ {
+      value=$0
+      sub(/^[[:space:]]*-[[:space:]]*/, "", value)
+      gsub(/[[:space:]]+$/, "", value)
+      if (value != "") print value
+    }
+  ' "$MEMORY_MEMBER_FILE" | jq -R -s 'split("\n") | map(select(length > 0))')
+fi
+
+# Collect projects
+projects_json="[]"
+if [ -d "$MEMORY_REGISTRY_ROOT/projects" ]; then
+  projects_json=$(
+    for f in "$MEMORY_REGISTRY_ROOT/projects"/*.yml; do
+      [ -f "$f" ] || continue
+      id=$(frontmatter_value id "$f" 2>/dev/null || basename "$f" .yml)
+      name=$(frontmatter_value name "$f" 2>/dev/null || echo "")
+      status=$(frontmatter_value status "$f" 2>/dev/null || echo "active")
+      kind=$(frontmatter_value kind "$f" 2>/dev/null || echo "")
+      desc=$(frontmatter_value description "$f" 2>/dev/null || echo "")
+      jq -n \
+        --arg id "$id" \
+        --arg name "$name" \
+        --arg status "$status" \
+        --arg kind "$kind" \
+        --arg description "$desc" \
+        '{id: $id, name: $name, status: $status, kind: $kind, description: $description}'
+    done | jq -s '.'
+  )
+fi
+
+# Collect repositories
+repos_json="[]"
+if [ -d "$MEMORY_REGISTRY_ROOT/repositories" ]; then
+  repos_json=$(
+    for f in "$MEMORY_REGISTRY_ROOT/repositories"/*.yml; do
+      [ -f "$f" ] || continue
+      slug=$(frontmatter_value slug "$f" 2>/dev/null || basename "$f" .yml)
+      project=$(frontmatter_value project "$f" 2>/dev/null || echo "")
+      role=$(frontmatter_value role "$f" 2>/dev/null || echo "")
+      url=$(frontmatter_value url "$f" 2>/dev/null || echo "")
+      jq -n \
+        --arg slug "$slug" \
+        --arg project "$project" \
+        --arg role "$role" \
+        --arg url "$url" \
+        '{slug: $slug, project: $project, role: $role, url: $url}'
+    done | jq -s '.'
+  )
+fi
+
+# Collect records grouped by project
+records_by_project="{}"
+if [ -d "$MEMORY_CONTEXT_ROOT/records/projects" ]; then
+  for proj_dir in "$MEMORY_CONTEXT_ROOT/records/projects"/*/; do
+    [ -d "$proj_dir" ] || continue
+    proj=$(basename "$proj_dir")
+    [ "$proj" = ".gitkeep" ] && continue
+    proj_records=$(
+      for rec in "$proj_dir"*.md; do
+        [ -f "$rec" ] || continue
+        title=$(frontmatter_value title "$rec" 2>/dev/null || basename "$rec" .md)
+        date_val=$(frontmatter_value date "$rec" 2>/dev/null || echo "")
+        member=$(frontmatter_value member "$rec" 2>/dev/null || echo "")
+        source_type=$(frontmatter_value source_type "$rec" 2>/dev/null || echo "")
+        status=$(frontmatter_value status "$rec" 2>/dev/null || echo "")
+        rel=${rec#"$MEMORY_REPO_ROOT"/}
+        jq -n \
+          --arg title "$title" \
+          --arg date "$date_val" \
+          --arg member "$member" \
+          --arg source_type "$source_type" \
+          --arg status "$status" \
+          --arg path "$rel" \
+          '{title: $title, date: $date, member: $member, source_type: $source_type, status: $status, path: $path}'
+      done | jq -s '.'
+    )
+    records_by_project=$(echo "$records_by_project" | jq --arg proj "$proj" --argjson recs "$proj_records" '. + {($proj): $recs}')
+  done
+fi
+
+# Extract tasks from records that have task_phase frontmatter
+tasks_json="[]"
+if [ -d "$MEMORY_CONTEXT_ROOT/records/projects" ]; then
+  tasks_json=$(
+    find "$MEMORY_CONTEXT_ROOT/records/projects" -type f -name '*.md' 2>/dev/null | sort | while IFS= read -r rec; do
+      phase=$(frontmatter_value task_phase "$rec" 2>/dev/null || echo "")
+      [ -z "$phase" ] && continue
+      title=$(frontmatter_value title "$rec" 2>/dev/null || basename "$rec" .md)
+      date_val=$(frontmatter_value date "$rec" 2>/dev/null || echo "")
+      member=$(frontmatter_value member "$rec" 2>/dev/null || echo "")
+      project=$(frontmatter_value project "$rec" 2>/dev/null || echo "")
+      task_status=$(frontmatter_value task_status "$rec" 2>/dev/null || echo "pending")
+      milestone=$(frontmatter_value milestone "$rec" 2>/dev/null || echo "")
+      assignee=$(frontmatter_value assignee "$rec" 2>/dev/null || "$member")
+      due=$(frontmatter_value due "$rec" 2>/dev/null || echo "")
+      rel=${rec#"$MEMORY_REPO_ROOT"/}
+      jq -n \
+        --arg title "$title" \
+        --arg date "$date_val" \
+        --arg project "$project" \
+        --arg phase "$phase" \
+        --arg status "$task_status" \
+        --arg milestone "$milestone" \
+        --arg assignee "$assignee" \
+        --arg due "$due" \
+        --arg path "$rel" \
+        '{title: $title, date: $date, project: $project, phase: $phase, status: $status, milestone: $milestone, assignee: $assignee, due: $due, path: $path}'
+    done | jq -s '.'
+  )
+fi
+
+# Extract decisions from records
+decisions_json="[]"
+if [ -d "$MEMORY_CONTEXT_ROOT/records/projects" ]; then
+  decisions_json=$(
+    find "$MEMORY_CONTEXT_ROOT/records/projects" -type f -name '*.md' 2>/dev/null | sort | while IFS= read -r rec; do
+      dec_status=$(frontmatter_value decision_status "$rec" 2>/dev/null || echo "")
+      [ -z "$dec_status" ] && continue
+      title=$(frontmatter_value title "$rec" 2>/dev/null || basename "$rec" .md)
+      date_val=$(frontmatter_value date "$rec" 2>/dev/null || echo "")
+      member=$(frontmatter_value member "$rec" 2>/dev/null || echo "")
+      project=$(frontmatter_value project "$rec" 2>/dev/null || echo "")
+      rel=${rec#"$MEMORY_REPO_ROOT"/}
+      jq -n \
+        --arg title "$title" \
+        --arg date "$date_val" \
+        --arg member "$member" \
+        --arg project "$project" \
+        --arg status "$dec_status" \
+        --arg path "$rel" \
+        '{title: $title, date: $date, member: $member, project: $project, status: $status, path: $path}'
+    done | jq -s '.'
+  )
+fi
+
+# Build wiki summaries per project
+wiki_json="{}"
+if [ -d "$MEMORY_CONTEXT_ROOT/wiki/projects" ]; then
+  for wiki_file in "$MEMORY_CONTEXT_ROOT/wiki/projects"/*/current-context.md; do
+    [ -f "$wiki_file" ] || continue
+    proj=$(basename "$(dirname "$wiki_file")")
+    # Read wiki content, escape for JSON
+    content=$(cat "$wiki_file" | jq -Rs '.')
+    wiki_json=$(echo "$wiki_json" | jq --arg proj "$proj" --argjson content "$content" '. + {($proj): $content}')
+  done
+fi
+
+# Generate timestamp
+generated=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+# Assemble final JSON
+result=$(jq -n \
+  --argjson members "$members_json" \
+  --argjson projects "$projects_json" \
+  --argjson repositories "$repos_json" \
+  --argjson records_by_project "$records_by_project" \
+  --argjson tasks "$tasks_json" \
+  --argjson decisions "$decisions_json" \
+  --argjson wiki "$wiki_json" \
+  --arg generated "$generated" \
+  '{
+    generated: $generated,
+    members: $members,
+    projects: $projects,
+    repositories: $repositories,
+    records_by_project: $records_by_project,
+    tasks: $tasks,
+    decisions: $decisions,
+    wiki: $wiki
+  }')
+
+# Output
+if [ -n "$output" ]; then
+  mkdir -p "$(dirname "$output")"
+  printf '%s\n' "$result" > "$output"
+  printf '%s\n' "$output"
+else
+  printf '%s\n' "$result"
+fi
