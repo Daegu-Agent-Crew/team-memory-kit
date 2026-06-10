@@ -89,6 +89,8 @@ CLI commands use the explicit `memory-*` prefix. Agent skills use the shorter
 
 ## Commands
 
+Requirements: Bash, Git, ripgrep (`rg`), and `jq`.
+
 - `memory-init`: creates a private team memory repo from the template.
 - `memory-upgrade`: refreshes generated repo product files from `PRODUCT_MANIFEST` in a newer kit checkout.
 - `memory-setup`: checks dependencies, member allowlist, and registry shape.
@@ -99,6 +101,7 @@ CLI commands use the explicit `memory-*` prefix. Agent skills use the shorter
 - `memory-load`: prints registry, wiki, and recent record pointers for agents.
 - `memory-ingest`: creates append-only source records.
 - `memory-wiki`: regenerates cited project wiki context from records.
+- `memory-dashboard`: generates explicitly public dashboard JSON.
 - `memory-secret-scan`: scans for obvious credentials and team denylist markers.
 - `memory-verify`: validates records, members, registry, citations, and safety.
 - `memory-lib-registry`: reads and validates project, repository, and messenger registry files.
@@ -125,6 +128,17 @@ memory snapshot metadata during support or release checks.
 Use `/tm-upgrade` to apply a newer kit release to an existing private team
 memory repo. The skill runs `memory-upgrade` so people do not need to call the
 helper directly.
+
+Dashboard export is opt-in per record:
+
+```yaml
+visibility: public
+dashboard_body: true
+```
+
+`memory-dashboard` exports only records with `visibility: public` or
+`dashboard: true`. `visibility: private` always excludes a record. Body and
+timeline summary text require `dashboard_body: true`.
 
 ## Model
 

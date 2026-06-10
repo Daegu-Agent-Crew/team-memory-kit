@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Team Intent Harness Problem Definition</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --blue-980: #07142d;
+      --blue-880: #102a63;
+      --blue-760: #1f4b99;
+      --blue-620: #2f6fed;
+      --blue-220: #bfd8ff;
+      --blue-120: #e4efff;
+      --blue-70: #f2f7ff;
+      --blue-20: #fbfdff;
+      --blue-line: rgba(31, 75, 153, 0.2);
+      --blue-glow: rgba(47, 111, 237, 0.18);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-snap-type: y proximity;
+      background: var(--blue-70);
+    }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--blue-980);
+      background: linear-gradient(180deg, var(--blue-70), var(--blue-20) 45%, var(--blue-120));
+    }
+
+    main {
+      width: min(1120px, calc(100vw - 32px));
+      margin: 0 auto;
+    }
+
+    .scene {
+      min-height: 100vh;
+      scroll-snap-align: start;
+      display: grid;
+      align-content: center;
+      gap: 28px;
+      padding: 56px 0;
+    }
+
+    .kicker {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 800;
+      color: var(--blue-620);
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    h1,
+    h2 {
+      margin: 0;
+      max-width: 900px;
+      letter-spacing: 0;
+      color: var(--blue-980);
+    }
+
+    h1 {
+      font-size: clamp(36px, 6vw, 72px);
+      line-height: 1.03;
+    }
+
+    h2 {
+      font-size: clamp(30px, 4.8vw, 58px);
+      line-height: 1.06;
+    }
+
+    .lead {
+      max-width: 760px;
+      margin: 0;
+      font-size: clamp(18px, 2vw, 23px);
+      line-height: 1.58;
+      color: var(--blue-880);
+    }
+
+    .hero-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 0.9fr) minmax(360px, 1.1fr);
+      gap: 42px;
+      align-items: center;
+    }
+
+    .velocity {
+      border: 1px solid var(--blue-line);
+      border-radius: 8px;
+      background: rgba(251, 253, 255, 0.72);
+      box-shadow: 0 24px 80px var(--blue-glow);
+      padding: 24px;
+    }
+
+    .velocity-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 32px;
+      color: var(--blue-760);
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .chart {
+      position: relative;
+      height: 300px;
+      border-left: 1px solid var(--blue-line);
+      border-bottom: 1px solid var(--blue-line);
+      overflow: hidden;
+    }
+
+    .chart::before,
+    .chart::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      border-top: 1px solid rgba(31, 75, 153, 0.1);
+    }
+
+    .chart::before {
+      top: 33%;
+    }
+
+    .chart::after {
+      top: 66%;
+    }
+
+    .line {
+      position: absolute;
+      left: 28px;
+      right: 28px;
+      height: 4px;
+      border-radius: 999px;
+      transform-origin: left center;
+    }
+
+    .line.fast {
+      bottom: 70px;
+      background: var(--blue-620);
+      transform: rotate(-28deg);
+      box-shadow: 0 0 0 10px rgba(47, 111, 237, 0.08);
+    }
+
+    .line.slow {
+      bottom: 76px;
+      width: 58%;
+      background: rgba(31, 75, 153, 0.36);
+      transform: rotate(-8deg);
+    }
+
+    .label {
+      position: absolute;
+      padding: 8px 10px;
+      border: 1px solid var(--blue-line);
+      border-radius: 8px;
+      background: rgba(251, 253, 255, 0.88);
+      color: var(--blue-880);
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .label.fast {
+      top: 40px;
+      right: 18px;
+    }
+
+    .label.slow {
+      bottom: 98px;
+      left: 72px;
+    }
+
+    .gap {
+      position: absolute;
+      top: 80px;
+      right: 96px;
+      height: 120px;
+      border-left: 2px dashed rgba(31, 75, 153, 0.4);
+    }
+
+    .gap span {
+      position: absolute;
+      top: 42px;
+      left: 12px;
+      width: 110px;
+      color: var(--blue-760);
+      font-size: 13px;
+      font-weight: 800;
+      line-height: 1.25;
+    }
+
+    .axis-note {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 12px;
+      color: rgba(16, 42, 99, 0.7);
+      font-size: 13px;
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 28px;
+      align-items: start;
+    }
+
+    .meeting {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 14px;
+      width: min(100%, 780px);
+      padding: 24px;
+      border: 1px solid var(--blue-line);
+      border-radius: 8px;
+      background:
+        linear-gradient(180deg, rgba(47, 111, 237, 0.08) 0 1px, transparent 1px 100%),
+        rgba(251, 253, 255, 0.72);
+      background-size: 100% 25%;
+      box-shadow: 0 24px 80px var(--blue-glow);
+    }
+
+    .person {
+      display: grid;
+      grid-template-columns: 58px minmax(0, 1fr);
+      align-items: center;
+      gap: 14px;
+      min-height: 70px;
+      padding: 12px;
+      border: 1px solid rgba(47, 111, 237, 0.18);
+      border-radius: 8px;
+      background: rgba(228, 239, 255, 0.42);
+    }
+
+    .bubble {
+      grid-column: 2;
+      grid-row: 1;
+      border: 1px solid rgba(47, 111, 237, 0.22);
+      border-radius: 8px;
+      padding: 12px;
+      background: rgba(251, 253, 255, 0.72);
+      color: var(--blue-880);
+      font-size: 14px;
+      line-height: 1.35;
+    }
+
+    .avatar {
+      grid-column: 1;
+      grid-row: 1;
+      width: 50px;
+      height: 50px;
+      border: 1px solid var(--blue-line);
+      border-radius: 8px;
+      background: linear-gradient(180deg, var(--blue-220), var(--blue-120));
+    }
+
+    .turn {
+      height: 12px;
+      border-radius: 999px;
+      background: rgba(47, 111, 237, 0.1);
+      overflow: hidden;
+    }
+
+    .turn::after {
+      content: "";
+      display: block;
+      width: 25%;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--blue-620);
+    }
+
+    .turn-label {
+      color: var(--blue-760);
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .result-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(320px, 440px);
+      gap: 42px;
+      align-items: center;
+    }
+
+    .chain {
+      display: grid;
+      gap: 16px;
+    }
+
+    .chain-item {
+      display: grid;
+      grid-template-columns: 48px 1fr;
+      gap: 16px;
+      align-items: start;
+      padding: 18px;
+      border: 1px solid var(--blue-line);
+      border-radius: 8px;
+      background: rgba(251, 253, 255, 0.76);
+    }
+
+    .num {
+      width: 48px;
+      height: 48px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      background: var(--blue-620);
+      color: var(--blue-20);
+      font-size: 18px;
+      font-weight: 900;
+    }
+
+    .chain-item b {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 19px;
+      color: var(--blue-980);
+    }
+
+    .chain-item span {
+      color: var(--blue-880);
+      font-size: 15px;
+      line-height: 1.55;
+    }
+
+    .definition {
+      border: 1px solid var(--blue-line);
+      border-radius: 8px;
+      padding: clamp(24px, 5vw, 54px);
+      background: linear-gradient(180deg, rgba(251, 253, 255, 0.88), rgba(228, 239, 255, 0.72));
+      box-shadow: 0 24px 80px var(--blue-glow);
+    }
+
+    .definition p {
+      margin: 0;
+      max-width: 980px;
+      color: var(--blue-980);
+      font-size: clamp(30px, 5vw, 64px);
+      line-height: 1.1;
+      font-weight: 850;
+      letter-spacing: 0;
+    }
+
+    .definition small {
+      display: block;
+      margin-top: 22px;
+      max-width: 760px;
+      color: var(--blue-880);
+      font-size: clamp(16px, 2vw, 21px);
+      line-height: 1.55;
+    }
+
+    @media (max-width: 900px) {
+      .hero-layout,
+      .split,
+      .result-layout {
+        grid-template-columns: 1fr;
+      }
+
+      .scene {
+        min-height: auto;
+        padding: 48px 0;
+      }
+
+      .meeting {
+        padding: 18px;
+      }
+    }
+
+    @media (max-width: 560px) {
+      main {
+        width: min(100vw - 24px, 520px);
+      }
+
+      .velocity,
+      .meeting,
+      .chain-item,
+      .definition {
+        border-radius: 6px;
+      }
+
+      .chart {
+        height: 240px;
+      }
+
+      .label.fast {
+        top: 34px;
+        right: 8px;
+      }
+
+      .label.slow {
+        left: 32px;
+      }
+
+      .gap {
+        right: 70px;
+      }
+
+      .person {
+        grid-template-columns: 46px minmax(0, 1fr);
+      }
+
+      .avatar {
+        width: 46px;
+        height: 46px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="scene hero-layout">
+      <div>
+        <p class="kicker">Problem Definition</p>
+        <h1>AI가 개인의 맥락을 팀보다 빠르게 늘린다</h1>
+        <p class="lead">각 팀원은 AI와 따로 탐색하며 근거, 대안, 판단 기준을 쌓는다. 그런데 팀은 여전히 회의에서 뒤늦게 서로의 의도를 맞춘다.</p>
+      </div>
+
+      <div class="velocity" aria-label="개인 맥락 생성과 팀 의도 정렬의 속도 차이">
+        <div class="velocity-title">
+          <span>속도</span>
+          <span>시간</span>
+        </div>
+        <div class="chart">
+          <div class="line fast"></div>
+          <div class="line slow"></div>
+          <div class="label fast">개인 AI 맥락 생성</div>
+          <div class="label slow">팀 의도 정렬</div>
+          <div class="gap"><span>정렬 격차</span></div>
+        </div>
+        <div class="axis-note">
+          <span>회의 전</span>
+          <span>회의 직전</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="scene split">
+      <div>
+        <p class="kicker">Why Meetings Slow Down</p>
+        <h2>회의는 AI 속도를 따라가지 못한다</h2>
+        <p class="lead">회의는 한 번에 한 사람, 한 논점만 처리한다. 그래서 이미 각자 AI와 만든 맥락이 회의 안에서 순차적으로 풀리며 병목이 된다.</p>
+      </div>
+
+      <div class="meeting" aria-label="회의의 발화 순서 제약">
+        <div class="turn-label">회의는 한 번에 한 줄만 처리한다</div>
+        <div class="turn"></div>
+        <div class="person">
+          <div class="bubble">Why와 성공 기준을 설명해야 함</div>
+          <div class="avatar"></div>
+        </div>
+        <div class="person">
+          <div class="bubble">다른 AI 세션에서 본 대안이 있음</div>
+          <div class="avatar"></div>
+        </div>
+        <div class="person">
+          <div class="bubble">하지 말아야 할 범위를 다르게 봄</div>
+          <div class="avatar"></div>
+        </div>
+        <div class="person">
+          <div class="bubble">근거는 있지만 아직 공유되지 않음</div>
+          <div class="avatar"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="scene result-layout">
+      <div>
+        <p class="kicker">What Actually Breaks</p>
+        <h2>문제는 정보 부족이 아니라 비교되지 않은 의도다</h2>
+        <p class="lead">더 많은 요약을 만드는 것만으로는 부족하다. 회의 전에 공통 기반과 충돌 지점을 분리하지 못하면, 팀은 긴 대화 후에도 다른 기준으로 구현을 시작한다.</p>
+      </div>
+
+      <div class="chain">
+        <div class="chain-item">
+          <div class="num">1</div>
+          <div>
+            <b>공통 합의가 회의 시간을 먹는다</b>
+            <span>이미 같은 방향을 보는 내용도 다시 설명된다.</span>
+          </div>
+        </div>
+        <div class="chain-item">
+          <div class="num">2</div>
+          <div>
+            <b>진짜 충돌이 늦게 드러난다</b>
+            <span>같은 단어를 쓰지만 Why, Not, 판단 기준이 다르다.</span>
+          </div>
+        </div>
+        <div class="chain-item">
+          <div class="num">3</div>
+          <div>
+            <b>구현 방향이 엇갈린다</b>
+            <span>AI가 구현을 잘해도 팀 의도가 다르면 결과가 갈라진다.</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="scene">
+      <div class="definition">
+        <p>AI 시대의 팀 병목은 더 많은 정보가 아니라, 회의 전에 여러 사람의 의도를 비교하고 압축하는 장치가 없다는 점이다.</p>
+        <small>Team Intent Harness의 문제 정의는 여기서 시작한다. 개인의 AI 세션에서 나온 의도를 회의 전에 비교해 공통 기반, 충돌, 결정해야 할 쟁점으로 바꿔야 한다.</small>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

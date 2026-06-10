@@ -28,6 +28,8 @@ private memory records or registries.
 
 ## First Setup
 
+Requirements: Bash, Git, ripgrep (`rg`), and `jq`.
+
 ```bash
 ./setup --host codex
 bin/memory-setup
@@ -74,6 +76,18 @@ Use `bin/memory-status` to inspect the resolved project, verification result,
 Git status, and recent context. Use `bin/memory-link-context --project
 team-memory` to create a local `team-memory-context/team-memory/` symlink
 mirror for easier browsing.
+
+Use `bin/memory-dashboard --output dashboard.json` to generate JSON for a public
+dashboard. Dashboard export is opt-in per record:
+
+```yaml
+visibility: public
+dashboard_body: true
+```
+
+Only records with `visibility: public` or `dashboard: true` are exported.
+`visibility: private` always excludes a record. Body and timeline summary text
+require `dashboard_body: true`.
 
 ## Record Model
 

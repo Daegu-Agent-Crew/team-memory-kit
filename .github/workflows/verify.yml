@@ -12,7 +12,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ripgrep
+          sudo apt-get install -y ripgrep jq
       - name: Run tests
         run: |
           chmod +x bin/memory-* tests/*.sh setup
