@@ -4,21 +4,352 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 eval "$("$SCRIPT_DIR/memory-paths")"
 
-if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
-  cat <<'USAGE'
-Usage: memory-sync
+repo="$MEMORY_REPO_ROOT"
+mode="auto"
+project=""
+dry_run=0
+push=0
+member="${TEAM_MEMORY_MEMBER:-}"
+paths=()
 
-Runs memory-verify and prints Git status plus the next sharing commands.
-It does not push.
+usage() {
+  cat >&2 <<'USAGE'
+Usage: memory-sync [--project <id>] [--paths <file> ...] [--all] [--dry-run] [--member <github>] [--push]
+
+Runs verification, stages only the selected team-memory scope, commits changes,
+and pushes only when --push is passed.
 USAGE
+}
+
+die() {
+  printf 'memory-sync: %s\n' "$*" >&2
+  exit 1
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --project)
+      project=${2:?Missing value for --project}
+      mode="project"
+      shift 2
+      ;;
+    --project=*)
+      project=${1#--project=}
+      mode="project"
+      shift
+      ;;
+    --paths)
+      mode="paths"
+      shift
+      ;;
+    --all)
+      mode="all"
+      shift
+      ;;
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
+    --member)
+      member=${2:?Missing value for --member}
+      shift 2
+      ;;
+    --member=*)
+      member=${1#--member=}
+      shift
+      ;;
+    --push)
+      push=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --*)
+      printf 'memory-sync: unknown argument: %s\n' "$1" >&2
+      usage
+      exit 2
+      ;;
+    *)
+      if [ "$mode" = "paths" ]; then
+        paths+=("$1")
+        shift
+      else
+        printf 'memory-sync: unexpected path without --paths: %s\n' "$1" >&2
+        usage
+        exit 2
+      fi
+      ;;
+  esac
+done
+
+git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "$repo is not a git repo yet."
+
+quote_yaml() {
+  printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+}
+
+rfc3339_now() {
+  date '+%Y-%m-%dT%H:%M:%S%z' | sed -E 's/([+-][0-9]{2})([0-9]{2})$/\1:\2/'
+}
+
+member_ids() {
+  [ -f "$MEMORY_MEMBER_FILE" ] || return 0
+  awk '
+    /^[[:space:]]*-[[:space:]]*/ {
+      value=$0
+      sub(/^[[:space:]]*-[[:space:]]*/, "", value)
+      gsub(/[[:space:]]+$/, "", value)
+      print value
+    }
+  ' "$MEMORY_MEMBER_FILE"
+}
+
+is_member_allowed() {
+  member_ids | awk -v id="$1" '$0 == id { found = 1 } END { exit found ? 0 : 1 }'
+}
+
+require_member() {
+  if [ -z "$member" ]; then
+    member=$(git -C "$repo" config github.user 2>/dev/null || true)
+  fi
+  if [ -z "$member" ]; then
+    die "context commits require --member <github>, TEAM_MEMORY_MEMBER, or git config github.user."
+  fi
+  if ! printf '%s\n' "$member" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$'; then
+    die "member is not a valid GitHub username: $member"
+  fi
+  if ! is_member_allowed "$member"; then
+    die "member '$member' is not listed in .github/team-memory-members.yml."
+  fi
+}
+
+relativize_path() {
+  input=$1
+  case "$input" in
+    "$repo"/*) rel=${input#$repo/} ;;
+    /*) printf 'memory-sync: path is outside team memory repo: %s\n' "$input" >&2; return 1 ;;
+    ./*) rel=${input#./} ;;
+    *) rel=$input ;;
+  esac
+  case "$rel" in
+    ""|.|..|../*|*/../*|/*)
+      printf 'memory-sync: unsafe path: %s\n' "$input" >&2
+      return 1
+      ;;
+  esac
+  printf '%s\n' "$rel"
+}
+
+is_safe_path() {
+  case "$1" in
+    context/policies/*|context/registry/*|context/records/*|context/wiki/*|MEMORY_VERSION|README.md|AGENTS.md|docs/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_sync_surface() {
+  is_safe_path "$1"
+}
+
+path_exists_or_tracked() {
+  rel=$1
+  [ -e "$repo/$rel" ] && return 0
+  git -C "$repo" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1
+}
+
+write_memory_version() {
+  updated_at=$1
+  scope=$2
+  snapshot_date=${updated_at%%T*}
+  {
+    printf 'schema_version: 1\n'
+    printf 'snapshot_date: %s\n' "$snapshot_date"
+    printf 'updated_at: %s\n' "$updated_at"
+    printf 'updated_by: %s\n' "$member"
+    printf 'updated_via: memory-sync\n'
+    printf 'sync_mode: %s\n' "$mode"
+    printf 'sync_scope: %s\n' "$scope"
+  } > "$repo/MEMORY_VERSION"
+}
+
+sync_scope() {
+  case "$mode" in
+    project) printf '%s\n' "$project" ;;
+    paths) printf '%s\n' "selected" ;;
+    all) printf '%s\n' "all" ;;
+    *) printf '%s\n' "$mode" ;;
+  esac
+}
+
+plan_tmp=$(mktemp "${MEMORY_TMP_ROOT}/memory-sync-plan.XXXXXX")
+refused_tmp=$(mktemp "${MEMORY_TMP_ROOT}/memory-sync-refused.XXXXXX")
+staged_tmp=$(mktemp "${MEMORY_TMP_ROOT}/memory-sync-staged.XXXXXX")
+planned_dirty_tmp=$(mktemp "${MEMORY_TMP_ROOT}/memory-sync-planned-dirty.XXXXXX")
+trap 'rm -f "$plan_tmp" "$refused_tmp" "$staged_tmp" "$planned_dirty_tmp"' EXIT
+
+add_plan_path() {
+  printf '%s\n' "$1" >> "$plan_tmp"
+}
+
+if [ "$mode" = "auto" ]; then
+  resolved=$("$SCRIPT_DIR/memory-project" --shell)
+  eval "$resolved"
+  project=$MEMORY_PROJECT
+  mode="project"
+fi
+
+case "$mode" in
+  project)
+    [ -n "$project" ] || { echo "memory-sync: missing project id" >&2; exit 2; }
+    add_plan_path "context/records/projects/$project"
+    add_plan_path "context/wiki/projects/$project"
+    "$SCRIPT_DIR/memory-lib-registry" project-files "$project" >> "$plan_tmp"
+    ;;
+  paths)
+    [ "${#paths[@]}" -gt 0 ] || { echo "memory-sync: --paths requires at least one path" >&2; exit 2; }
+    for input in "${paths[@]}"; do
+      rel=$(relativize_path "$input") || exit 2
+      if ! is_safe_path "$rel"; then
+        printf 'memory-sync: refusing unsafe sync path: %s\n' "$rel" >&2
+        exit 2
+      fi
+      if [ -d "$repo/$rel" ]; then
+        printf 'memory-sync: --paths only accepts files, not directories: %s\n' "$rel" >&2
+        exit 2
+      fi
+      add_plan_path "$rel"
+    done
+    ;;
+  all)
+    add_plan_path "context/registry"
+    add_plan_path "context/policies"
+    add_plan_path "context/records"
+    add_plan_path "context/wiki"
+    add_plan_path "MEMORY_VERSION"
+    add_plan_path "README.md"
+    add_plan_path "AGENTS.md"
+    add_plan_path "docs"
+    ;;
+  *)
+    printf 'memory-sync: unknown mode: %s\n' "$mode" >&2
+    exit 2
+    ;;
+esac
+add_plan_path "MEMORY_VERSION"
+sort -u "$plan_tmp" -o "$plan_tmp"
+
+in_plan() {
+  rel=$1
+  while IFS= read -r planned; do
+    [ -n "$planned" ] || continue
+    if [ "$rel" = "$planned" ] || [ "${rel#"$planned/"}" != "$rel" ]; then
+      return 0
+    fi
+  done < "$plan_tmp"
+  return 1
+}
+
+while IFS= read -r staged; do
+  [ -n "$staged" ] || continue
+  if ! in_plan "$staged"; then
+    printf '%s\n' "$staged" >> "$staged_tmp"
+  else
+    printf '%s\n' "$staged" >> "$planned_dirty_tmp"
+  fi
+done < <(git -C "$repo" diff --cached --name-only)
+
+if [ -s "$staged_tmp" ]; then
+  echo "memory-sync: refusing to commit staged files outside the sync plan." >&2
+  cat "$staged_tmp" >&2
+  exit 4
+fi
+
+while IFS= read -r line; do
+  rel=${line:3}
+  rel=${rel#\"}
+  rel=${rel%\"}
+  case "$rel" in
+    *" -> "*) rel=${rel##* -> } ;;
+  esac
+  [ -n "$rel" ] || continue
+  if is_sync_surface "$rel"; then
+    if in_plan "$rel"; then
+      printf '%s\n' "$rel" >> "$planned_dirty_tmp"
+    else
+      printf '%s\n' "$rel" >> "$refused_tmp"
+    fi
+  fi
+done < <(git -C "$repo" status --porcelain --untracked-files=all)
+
+if [ "$dry_run" -eq 1 ]; then
+  echo "Sync plan"
+  echo
+  echo "Included:"
+  if [ -s "$plan_tmp" ]; then sed 's/^/- /' "$plan_tmp"; else echo "- none"; fi
+  echo
+  echo "Refused / unrelated:"
+  if [ -s "$refused_tmp" ]; then sort -u "$refused_tmp" | sed 's/^/- /'; else echo "- none"; fi
+  echo
+  echo "Already staged outside plan:"
+  if [ -s "$staged_tmp" ]; then sed 's/^/- /' "$staged_tmp"; else echo "- none"; fi
   exit 0
 fi
 
-"$SCRIPT_DIR/memory-verify"
-printf '\nGit status:\n'
-git -C "$MEMORY_REPO_ROOT" status --short
-printf '\nNext steps:\n'
-printf '  git add <intentional files>\n'
-printf '  git commit -m "context: update team memory"\n'
-printf '  git push\n'
-printf '  bin/memory-share-plan --project <project> --title "<summary>"\n'
+if [ -s "$refused_tmp" ]; then
+  echo "memory-sync: refusing to sync dirty files outside the sync plan." >&2
+  sort -u "$refused_tmp" >&2
+  echo "memory-sync: rerun with --paths for exact files or --all for broad context sync." >&2
+  exit 5
+fi
+
+if ! "$SCRIPT_DIR/memory-verify"; then
+  echo "memory-sync: verification failed; not committing or pushing." >&2
+  exit 1
+fi
+
+if [ -s "$planned_dirty_tmp" ]; then
+  require_member
+fi
+
+while IFS= read -r planned; do
+  [ -n "$planned" ] || continue
+  if path_exists_or_tracked "$planned"; then
+    git -C "$repo" add -- "$planned"
+  fi
+done < "$plan_tmp"
+
+if git -C "$repo" diff --cached --quiet; then
+  echo "memory-sync: no team memory changes to commit."
+else
+  require_member
+  updated_at=$(rfc3339_now)
+  scope=$(sync_scope)
+  write_memory_version "$updated_at" "$scope"
+  git -C "$repo" add -- MEMORY_VERSION
+
+  if [ "$mode" = "all" ]; then
+    commit_msg="memory: update all team memory"
+  elif [ "$mode" = "paths" ]; then
+    commit_msg="memory: update selected team memory"
+  else
+    commit_msg="memory: update $project team memory"
+  fi
+
+  git -C "$repo" commit -m "$commit_msg" -m "Team-Memory-Member: $member
+Team-Memory-Updated-At: $updated_at
+Team-Memory-Scope: $scope
+Team-Memory-Sync-Mode: $mode"
+fi
+
+if [ "$push" -eq 1 ]; then
+  if git -C "$repo" remote get-url origin >/dev/null 2>&1; then
+    git -C "$repo" push
+  else
+    echo "memory-sync: no origin remote configured; commit remains local."
+  fi
+else
+  echo "memory-sync: push not requested; commit remains local."
+  echo "memory-sync: run bin/memory-share-plan --project <project> --title \"<summary>\" after review."
+fi

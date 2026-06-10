@@ -10,6 +10,9 @@ reloadable summaries.
 - Write durable source material with `bin/memory-ingest`.
 - Regenerate wiki with `bin/memory-wiki`.
 - Run `bin/memory-verify` before sync or share.
+- Use `bin/memory-status` to inspect current project, verification, Git status, and recent context.
+- Use `bin/memory-link-context --project <project>` when a local context mirror helps browsing.
+- Sync scoped changes with `bin/memory-sync --project <project> --member <github>` or exact files with `--paths`.
 - Use `bin/memory-share-plan` for approved Slack, Discord, email, or chat drafts.
 - Never write to external messengers before explicit human approval.
 - Do not store secrets. Redact tokens, passwords, `.env` values, private keys,

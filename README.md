@@ -32,6 +32,13 @@ Then edit:
 - `context/registry/repositories/team-memory.yml`
 - `context/registry/messengers/channels/general.yml`
 
+Commit the generated baseline after editing the template values:
+
+```bash
+git add .
+git commit -m "chore: initialize team memory"
+```
+
 Ingest the first note:
 
 ```bash
@@ -44,7 +51,7 @@ bin/memory-ingest \
 
 bin/memory-wiki --project team-memory
 bin/memory-verify
-bin/memory-sync
+bin/memory-sync --project team-memory --member your-github-username
 bin/memory-share-plan --project team-memory --title "First memory update"
 ```
 
@@ -66,15 +73,31 @@ CLI commands use the explicit `memory-*` prefix. Agent skills use the shorter
 
 - `memory-init`: creates a private team memory repo from the template.
 - `memory-setup`: checks dependencies, member allowlist, and registry shape.
+- `memory-status`: prints runtime paths, resolved project, verification, Git status, and recent context.
 - `memory-project`: resolves the current Git repo to a memory project.
 - `memory-project-register`: maps the current repo to an existing or new project.
+- `memory-link-context`: creates a local `team-memory-context/<project>/` symlink mirror.
 - `memory-load`: prints registry, wiki, and recent record pointers for agents.
 - `memory-ingest`: creates append-only source records.
 - `memory-wiki`: regenerates cited project wiki context from records.
 - `memory-secret-scan`: scans for obvious credentials and team denylist markers.
 - `memory-verify`: validates records, members, registry, citations, and safety.
-- `memory-sync`: runs verification and prints Git sharing next steps.
+- `memory-lib-registry`: reads and validates project, repository, and messenger registry files.
+- `memory-sync`: verifies, stages only the selected scope, commits, and pushes only with `--push`.
+- `memory-commit-policy-check`: validates team memory commit trailers and `MEMORY_VERSION`.
 - `memory-share-plan`: drafts an approval-gated Slack/Discord/email/chat update.
+
+Useful sync modes:
+
+```bash
+bin/memory-sync --project team-memory --member your-github-username
+bin/memory-sync --paths context/wiki/projects/team-memory/current-context.md --member your-github-username
+bin/memory-sync --all --member your-github-username
+bin/memory-sync --project team-memory --member your-github-username --push
+```
+
+`memory-sync` writes `MEMORY_VERSION` and commit trailers. It refuses unrelated
+staged files and dirty team-memory files outside the selected sync plan.
 
 ## Model
 
@@ -106,6 +129,7 @@ records, wiki files, commits, or pull requests.
 - `misc` is blocked by verification unless explicitly handled outside the
   default path.
 - Secret scanning runs before records are written and before sync.
+- Sync commits identify the responsible human member from `.github/team-memory-members.yml`.
 - Team-specific private markers belong in `context/policies/denylist.txt`.
 - External sharing is draft-first and requires human approval.
 

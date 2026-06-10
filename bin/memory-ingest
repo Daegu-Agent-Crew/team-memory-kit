@@ -34,7 +34,7 @@ is_member() {
 slugify() {
   printf '%s' "$1" |
     tr '[:upper:]' '[:lower:]' |
-    sed -E 's/[^a-z0-9가-힣._-]+/-/g; s/^-+//; s/-+$//; s/-+/-/g'
+    sed -E 's/[^a-z0-9._-]+/-/g; s/^-+//; s/-+$//; s/-+/-/g'
 }
 
 yaml_quote() {
