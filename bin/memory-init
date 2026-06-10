@@ -32,6 +32,7 @@ mkdir -p "$target/bin" "$target/skills"
 cp "$KIT_ROOT"/bin/memory-* "$target/bin/"
 cp -R "$KIT_ROOT"/skills/tm-* "$target/skills/"
 cp "$KIT_ROOT/setup" "$target/setup"
+cp "$KIT_ROOT/VERSION" "$target/VERSION"
 chmod +x "$target"/bin/memory-* "$target/setup"
 
 if ! git -C "$target" rev-parse --is-inside-work-tree >/dev/null 2>&1; then

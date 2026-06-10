@@ -17,6 +17,29 @@ fi
 printf 'MEMORY_REPO_ROOT=%s\n' "$MEMORY_REPO_ROOT"
 printf 'MEMORY_CONTEXT_ROOT=%s\n' "$MEMORY_CONTEXT_ROOT"
 printf 'MEMORY_HOME=%s\n' "$MEMORY_HOME"
+if [ -f "$MEMORY_REPO_ROOT/VERSION" ]; then
+  printf 'TEAM_MEMORY_KIT_VERSION=%s\n' "$(sed -n '1p' "$MEMORY_REPO_ROOT/VERSION")"
+else
+  printf 'TEAM_MEMORY_KIT_VERSION=missing\n'
+fi
+if [ -f "$MEMORY_REPO_ROOT/MEMORY_VERSION" ]; then
+  memory_version_value() {
+    awk -F ':' -v key="$1" '
+      $1 == key {
+        value = $0
+        sub("^[^:]+:[[:space:]]*", "", value)
+        print value
+        exit
+      }
+    ' "$MEMORY_REPO_ROOT/MEMORY_VERSION"
+  }
+  printf 'MEMORY_VERSION_UPDATED_AT=%s\n' "$(memory_version_value updated_at)"
+  printf 'MEMORY_VERSION_UPDATED_BY=%s\n' "$(memory_version_value updated_by)"
+  printf 'MEMORY_VERSION_SYNC_MODE=%s\n' "$(memory_version_value sync_mode)"
+  printf 'MEMORY_VERSION_SYNC_SCOPE=%s\n' "$(memory_version_value sync_scope)"
+else
+  printf 'MEMORY_VERSION=missing\n'
+fi
 printf 'MEMORY_PROJECT=%s\n' "$MEMORY_PROJECT"
 printf 'MEMORY_PROJECT_SOURCE=%s\n' "$MEMORY_PROJECT_SOURCE"
 printf 'MEMORY_PROJECT_MATCH=%s\n' "$MEMORY_PROJECT_MATCH"

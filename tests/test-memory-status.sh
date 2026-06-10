@@ -11,6 +11,9 @@ git -C "$repo" remote add origin git@github.com:owner/team-memory.git
 
 status_output=$("$repo/bin/memory-status")
 assert_contains "$status_output" "MEMORY_REPO_ROOT=$repo"
+assert_contains "$status_output" "TEAM_MEMORY_KIT_VERSION=$(sed -n '1p' "$ROOT/VERSION")"
+assert_contains "$status_output" "MEMORY_VERSION_UPDATED_AT=1970-01-01T00:00:00Z"
+assert_contains "$status_output" "MEMORY_VERSION_UPDATED_BY=example-user"
 assert_contains "$status_output" "MEMORY_PROJECT=team-memory"
 assert_contains "$status_output" "MEMORY_PROJECT_MATCH=alias"
 assert_contains "$status_output" "memory-verify: ok"

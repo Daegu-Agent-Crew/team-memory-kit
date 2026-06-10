@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+DEFAULT_SOURCE=$(cd "$SCRIPT_DIR/.." && pwd)
+
+source_root=${TEAM_MEMORY_KIT_ROOT:-"$DEFAULT_SOURCE"}
+dry_run=0
+target=""
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: memory-upgrade [--source <kit-repo>] [--dry-run] <team-memory-repo>
+
+Upgrades product-owned team-memory-kit files in a private team memory repo:
+VERSION, setup, bin/memory-*, and skills/tm-*.
+
+It does not touch context/, MEMORY_VERSION, member allowlists, registries, or
+share drafts. Run from a team-memory-kit checkout, or pass --source when running
+from an existing private team memory repo.
+USAGE
+}
+
+die() {
+  printf 'memory-upgrade: %s\n' "$*" >&2
+  exit 1
+}
+
+canonical_dir() {
+  dir=$1
+  [ -d "$dir" ] || return 1
+  (cd "$dir" >/dev/null 2>&1 && pwd -P)
+}
+
+version_value() {
+  file=$1
+  if [ -f "$file" ]; then
+    sed -n '1p' "$file"
+  else
+    printf 'missing\n'
+  fi
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --source)
+      source_root=${2:?Missing value for --source}
+      shift 2
+      ;;
+    --source=*)
+      source_root=${1#--source=}
+      shift
+      ;;
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --*)
+      printf 'memory-upgrade: unknown argument: %s\n' "$1" >&2
+      usage
+      exit 2
+      ;;
+    *)
+      if [ -z "$target" ]; then
+        target=$1
+        shift
+      else
+        printf 'memory-upgrade: unexpected argument: %s\n' "$1" >&2
+        usage
+        exit 2
+      fi
+      ;;
+  esac
+done
+
+[ -n "$target" ] || { usage; exit 2; }
+
+source_root=$(canonical_dir "$source_root") || die "source kit repo does not exist: $source_root"
+target_root=$(canonical_dir "$target") || die "target team memory repo does not exist: $target"
+
+[ "$source_root" != "$target_root" ] || die "source and target are the same. Run from a team-memory-kit checkout or pass --source <kit-repo>."
+[ -f "$source_root/VERSION" ] || die "source is missing VERSION: $source_root"
+[ -d "$source_root/bin" ] || die "source is missing bin/: $source_root"
+[ -d "$source_root/skills" ] || die "source is missing skills/: $source_root"
+[ -f "$source_root/setup" ] || die "source is missing setup: $source_root"
+[ -f "$target_root/MEMORY_VERSION" ] || die "target does not look like a private team memory repo; missing MEMORY_VERSION: $target_root"
+[ -d "$target_root/context" ] || die "target does not look like a private team memory repo; missing context/: $target_root"
+
+shopt -s nullglob
+helper_files=("$source_root"/bin/memory-*)
+skill_dirs=("$source_root"/skills/tm-*)
+shopt -u nullglob
+
+[ "${#helper_files[@]}" -gt 0 ] || die "source has no bin/memory-* helpers"
+[ "${#skill_dirs[@]}" -gt 0 ] || die "source has no skills/tm-* skills"
+
+source_version=$(version_value "$source_root/VERSION")
+target_version=$(version_value "$target_root/VERSION")
+
+printf 'memory-upgrade: source=%s\n' "$source_root"
+printf 'memory-upgrade: target=%s\n' "$target_root"
+printf 'memory-upgrade: current VERSION=%s\n' "$target_version"
+printf 'memory-upgrade: source VERSION=%s\n' "$source_version"
+
+if [ "$dry_run" -eq 1 ]; then
+  printf '\nWould update:\n'
+  printf '%s\n' '- VERSION'
+  printf '%s\n' '- setup'
+  for helper in "${helper_files[@]}"; do
+    printf -- '- bin/%s\n' "$(basename "$helper")"
+  done
+  for skill in "${skill_dirs[@]}"; do
+    printf -- '- skills/%s/\n' "$(basename "$skill")"
+  done
+  printf '\nWould not touch:\n'
+  printf '%s\n' '- context/'
+  printf '%s\n' '- MEMORY_VERSION'
+  printf '%s\n' '- .github/team-memory-members.yml'
+  exit 0
+fi
+
+mkdir -p "$target_root/bin" "$target_root/skills"
+cp "$source_root/VERSION" "$target_root/VERSION"
+cp "$source_root/setup" "$target_root/setup"
+
+for helper in "${helper_files[@]}"; do
+  cp "$helper" "$target_root/bin/$(basename "$helper")"
+done
+
+for skill in "${skill_dirs[@]}"; do
+  name=$(basename "$skill")
+  rm -rf "$target_root/skills/$name"
+  cp -R "$skill" "$target_root/skills/$name"
+done
+
+chmod +x "$target_root"/bin/memory-* "$target_root/setup"
+
+if ! "$target_root/bin/memory-verify"; then
+  die "upgrade copied product files, but verification failed. Fix verification issues before syncing."
+fi
+
+printf 'memory-upgrade: upgraded from %s to %s\n' "$target_version" "$source_version"

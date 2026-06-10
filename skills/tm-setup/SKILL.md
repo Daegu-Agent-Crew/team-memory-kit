@@ -36,6 +36,9 @@ Developer Mode or use an elevated Git Bash, then rerun setup.
 If setup reports missing members, ask the user for the responsible GitHub
 username and add it to `.github/team-memory-members.yml` only after confirmation.
 
+For an existing private team memory repo that needs newer installed helpers or
+skills, use `tm-upgrade` instead of rerunning `memory-init`.
+
 Success criteria:
 
 - `~/.team-memory` points to this repo's `context/`.
