@@ -14,7 +14,9 @@ bin/memory-setup
 For local skill installation:
 
 ```bash
-./setup --host codex
+./setup --host codex   # Codex only
+./setup --host claude  # Claude Code only
+./setup --host auto    # both
 ```
 
 If setup reports missing members, ask the user for the responsible GitHub

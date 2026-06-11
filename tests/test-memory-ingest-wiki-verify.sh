@@ -20,6 +20,10 @@ record=$("$repo/bin/memory-ingest" --member example-user --source-type codex-ses
 assert_file_exists "$record"
 assert_contains "$(cat "$record")" "source_type: codex-session"
 
+claude_record=$("$repo/bin/memory-ingest" --member example-user --source-type claude-session --title "Claude session note" "$note")
+assert_file_exists "$claude_record"
+assert_contains "$(cat "$claude_record")" "source_type: claude-session"
+
 wiki=$("$repo/bin/memory-wiki" --project team-memory)
 assert_file_exists "$wiki"
 assert_contains "$(cat "$wiki")" "[source: context/records/projects/team-memory/"

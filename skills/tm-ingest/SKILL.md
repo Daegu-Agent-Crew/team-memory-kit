@@ -1,6 +1,6 @@
 ---
 name: tm-ingest
-description: Create append-only source records from Codex sessions, meeting notes, research notes, decisions, or manually copied messenger text.
+description: Create append-only source records from Codex or Claude Code sessions, meeting notes, research notes, decisions, or manually copied messenger text.
 ---
 
 # tm-ingest
@@ -19,9 +19,12 @@ bin/memory-ingest \
   /path/to/source.md
 ```
 
+Use `--source-type claude-session` when the source is a Claude Code session.
+
 Allowed source types:
 
 - `codex-session`
+- `claude-session`
 - `messenger-manual`
 - `meeting-note`
 - `research-note`
