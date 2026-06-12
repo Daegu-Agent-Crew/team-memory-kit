@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+eval "$(bash "$SCRIPT_DIR/memory-paths")"
+
+usage() {
+  cat <<'USAGE'
+Usage: memory-intent-new --project PROJECT --topic TOPIC [--date DATE]
+
+Creates an intent run folder:
+  context/intents/projects/<project>/YYYY-MM-DD-<slug>/
+    run.yml          ← run metadata
+    inputs/.gitkeep
+    outputs/.gitkeep
+USAGE
+}
+
+die() {
+  printf 'memory-intent-new: %s\n' "$*" >&2
+  exit 1
+}
+
+slugify() {
+  printf '%s' "$1" |
+    tr '[:upper:]' '[:lower:]' |
+    sed -E 's/[^a-z0-9._-]+/-/g; s/^-+//; s/-+$//; s/-+/-/g'
+}
+
+yaml_quote() {
+  printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+}
+
+project=""
+topic=""
+date=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --project)
+      project=${2:-}
+      [ -n "$project" ] || die "--project needs a value"
+      shift 2
+      ;;
+    --topic)
+      topic=${2:-}
+      [ -n "$topic" ] || die "--topic needs a value"
+      shift 2
+      ;;
+    --date)
+      date=${2:-}
+      [ -n "$date" ] || die "--date needs a value"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "unknown argument: $1"
+      ;;
+  esac
+done
+
+[ -n "$project" ] || die "missing --project. Run with --help for usage."
+[ -n "$topic" ]   || die "missing --topic. Run with --help for usage."
+
+if [ -z "$date" ]; then
+  date=$(date +%Y-%m-%d)
+fi
+
+slug=$(slugify "$topic")
+run_name="${date}-${slug}"
+intent_root="$MEMORY_CONTEXT_ROOT/intents/projects/$project/$run_name"
+
+if [ -d "$intent_root" ]; then
+  die "intent run already exists: $intent_root"
+fi
+
+mkdir -p "$intent_root/inputs" "$intent_root/outputs"
+touch "$intent_root/inputs/.gitkeep" "$intent_root/outputs/.gitkeep"
+
+cat > "$intent_root/run.yml" <<YAML
+schema_version: 1
+project: $(yaml_quote "$project")
+topic: $(yaml_quote "$topic")
+date: $date
+status: open
+members: []
+YAML
+
+printf 'Created intent run: %s\n' "$intent_root"
+printf '  run.yml      — run metadata (status: open)\n'
+printf '  inputs/      — drop team-member .intent.md files here\n'
+printf '  outputs/     — compiled reports will go here\n'

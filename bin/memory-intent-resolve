@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+eval "$(bash "$SCRIPT_DIR/memory-paths")"
+
+usage() {
+  cat <<'USAGE'
+Usage: memory-intent-resolve --project PROJECT --run RUN_NAME --decision-file FILE
+
+Records meeting decisions:
+  1. Ingests the decision file as a project record
+  2. Updates run.yml status to resolved
+USAGE
+}
+
+die() {
+  printf 'memory-intent-resolve: %s\n' "$*" >&2
+  exit 1
+}
+
+slugify() {
+  printf '%s' "$1" |
+    tr '[:upper:]' '[:lower:]' |
+    sed -E 's/[^a-z0-9._-]+/-/g; s/^-+//; s/-+$//; s/-+/-/g'
+}
+
+project=""
+run_name=""
+decision_file=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --project)
+      project=${2:-}
+      [ -n "$project" ] || die "--project needs a value"
+      shift 2
+      ;;
+    --run)
+      run_name=${2:-}
+      [ -n "$run_name" ] || die "--run needs a value"
+      shift 2
+      ;;
+    --decision-file)
+      decision_file=${2:-}
+      [ -n "$decision_file" ] || die "--decision-file needs a value"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "unknown argument: $1"
+      ;;
+  esac
+done
+
+[ -n "$project" ]       || die "missing --project. Run with --help for usage."
+[ -n "$run_name" ]      || die "missing --run. Run with --help for usage."
+[ -n "$decision_file" ] || die "missing --decision-file. Run with --help for usage."
+
+[ -f "$decision_file" ] || die "decision file not found: $decision_file"
+
+intent_root="$MEMORY_CONTEXT_ROOT/intents/projects/$project/$run_name"
+run_yml="$intent_root/run.yml"
+
+[ -f "$run_yml" ] || die "run not found: $run_yml"
+
+# Read current status
+run_field() {
+  local key=$1
+  awk -v key="$key" '
+    $0 ~ "^[[:space:]]*" key ":[[:space:]]*" {
+      value = $0
+      sub("^[[:space:]]*" key ":[[:space:]]*", "", value)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      gsub(/^"|"$/, "", value)
+      print value
+      exit
+    }
+  ' "$run_yml"
+}
+
+status=$(run_field status)
+if [ "$status" = "resolved" ]; then
+  die "run is already resolved."
+fi
+
+# Extract topic from run.yml for the record slug
+topic=$(run_field topic)
+date=$(run_field date)
+
+# Create a project record from the decision file
+records_dir="$MEMORY_CONTEXT_ROOT/records/projects/$project"
+mkdir -p "$records_dir"
+
+slug=$(slugify "${topic:-$run_name}")
+record_file="$records_dir/${date}-${slug}-decisions.md"
+
+# Prepend frontmatter if the decision file doesn't already have it
+if head -1 "$decision_file" | grep -q '^---'; then
+  # Already has frontmatter — copy as-is
+  cp "$decision_file" "$record_file"
+else
+  # Add minimal frontmatter
+  cat > "$record_file" <<HEADER
+---
+type: decision
+project: ${project}
+date: ${date}
+source: intent-run/${run_name}
+---
+
+HEADER
+  cat "$decision_file" >> "$record_file"
+fi
+
+# Update run.yml status to resolved
+sed -i 's/^status:.*$/status: resolved/' "$run_yml"
+
+printf 'Resolved intent run: %s\n' "$run_name"
+printf '  Decision record: %s\n' "$record_file"
+printf '  run.yml status: resolved\n'

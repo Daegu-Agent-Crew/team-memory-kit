@@ -1,0 +1,345 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+eval "$(bash "$SCRIPT_DIR/memory-paths")"
+
+usage() {
+  cat <<'USAGE'
+Usage: memory-intent-prepare --project PROJECT --run RUN_NAME
+
+Reads team-member intent files from inputs/ and generates compiled reports
+in outputs/:
+  team-intent-report.md   — common ground summary
+  conflict-report.md      — disagreements and gaps
+  meeting-agenda.md       — items needing synchronous discussion
+  source-map.md           — claim → source file mapping
+USAGE
+}
+
+die() {
+  printf 'memory-intent-prepare: %s\n' "$*" >&2
+  exit 1
+}
+
+slugify() {
+  printf '%s' "$1" |
+    tr '[:upper:]' '[:lower:]' |
+    sed -E 's/[^a-z0-9._-]+/-/g; s/^-+//; s/-+$//; s/-+/-/g'
+}
+
+yaml_quote() {
+  printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+}
+
+project=""
+run_name=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --project)
+      project=${2:-}
+      [ -n "$project" ] || die "--project needs a value"
+      shift 2
+      ;;
+    --run)
+      run_name=${2:-}
+      [ -n "$run_name" ] || die "--run needs a value"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "unknown argument: $1"
+      ;;
+  esac
+done
+
+[ -n "$project" ]  || die "missing --project. Run with --help for usage."
+[ -n "$run_name" ] || die "missing --run. Run with --help for usage."
+
+intent_root="$MEMORY_CONTEXT_ROOT/intents/projects/$project/$run_name"
+run_yml="$intent_root/run.yml"
+inputs_dir="$intent_root/inputs"
+outputs_dir="$intent_root/outputs"
+
+[ -f "$run_yml" ] || die "run not found: $run_yml"
+
+# --- helper: read a field from run.yml (simple key: value) ---
+run_field() {
+  local key=$1
+  awk -v key="$key" '
+    $0 ~ "^[[:space:]]*" key ":[[:space:]]*" {
+      value = $0
+      sub("^[[:space:]]*" key ":[[:space:]]*", "", value)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      gsub(/^"|"$/, "", value)
+      print value
+      exit
+    }
+  ' "$run_yml"
+}
+
+status=$(run_field status)
+[ "$status" = "open" ] || die "run status is '$status', expected 'open'. Only open runs can be prepared."
+
+# Collect intent files
+intent_files=()
+if [ -d "$inputs_dir" ]; then
+  while IFS= read -r -d '' f; do
+    intent_files+=("$f")
+  done < <(find "$inputs_dir" -maxdepth 1 -name '*.intent.md' -print0 2>/dev/null | sort -z)
+fi
+
+if [ "${#intent_files[@]}" -eq 0 ]; then
+  die "no .intent.md files found in $inputs_dir"
+fi
+
+# --- helper: extract a section (## Heading ...body...) from a markdown file ---
+extract_section() {
+  local file=$1 heading=$2
+  awk -v heading="$heading" '
+    /^## / {
+      if ($0 ~ "^## " heading "[[:space:]]*$") {
+        capturing = 1
+      } else {
+        capturing = 0
+      }
+      next
+    }
+    capturing { print }
+  ' "$file"
+}
+
+# --- helper: extract member name from filename (e.g. alice.intent.md → alice) ---
+member_from_file() {
+  local f=$1
+  local base
+  base=$(basename "$f")
+  printf '%s' "${base%.intent.md}"
+}
+
+# ── Build temporary working data ──
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
+# Write each member's sections into individual files for analysis
+members=()
+for f in "${intent_files[@]}"; do
+  m=$(member_from_file "$f")
+  members+=("$m")
+  mkdir -p "$tmpdir/$m"
+  for sec in Why What Not Evidence "Decision Criteria" "Open Questions"; do
+    extract_section "$f" "$sec" > "$tmpdir/$m/$(printf '%s' "$sec" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')"
+  done
+done
+
+# ── 1. Source Map ──
+{
+  printf '%s\n\n' '# Source Map'
+  printf '%s\n\n' 'Mapping of claims to source intent files.'
+  for f in "${intent_files[@]}"; do
+    m=$(member_from_file "$f")
+    printf '## %s\n\n' "$m"
+    for sec in Why What Not Evidence "Decision Criteria" "Open Questions"; do
+      sec_file="$tmpdir/$m/$(printf '%s' "$sec" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')"
+      if [ -s "$sec_file" ]; then
+        summary=$(head -1 "$sec_file" | sed 's/^[[:space:]]*//' | head -c 120)
+        printf '%s\n' "- **$sec**: $summary"
+      fi
+    done
+    printf '\n'
+  done
+} > "$outputs_dir/source-map.md"
+
+# ── 2. Team Intent Report (Common Ground) ──
+{
+  printf '%s\n\n' '# Team Intent Report'
+  printf '**Project**: %s  \n' "$project"
+  printf '**Run**: %s  \n' "$run_name"
+  printf '**Date**: %s  \n' "$(run_field date)"
+  printf '**Members**: %s\n\n' "$(IFS=,; printf '%s' "${members[*]}")"
+  printf '%s\n\n' '---'
+
+  # Gather all "What" statements across members for common ground
+  printf '## Common Ground\n\n'
+  printf 'Directions shared by multiple team members:\n\n'
+
+  # Collect all "what" lines across members
+  all_what_file="$tmpdir/all-what"
+  : > "$all_what_file"
+  for m in "${members[@]}"; do
+    what_file="$tmpdir/$m/what"
+    [ -f "$what_file" ] || continue
+    while IFS= read -r line; do
+      [ -n "$line" ] && printf '%s\t%s\n' "$m" "$line" >> "$all_what_file"
+    done < "$what_file"
+  done
+
+  # Deduplicate by trimming and looking for similar lines (simple: exact match after trim+lower)
+  if [ -s "$all_what_file" ]; then
+    awk -F'\t' '
+      {
+        body = tolower($2)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", body)
+        if (body != "") {
+          if (!(body in seen)) {
+            seen[body] = $1
+            count[body] = 1
+          } else {
+            count[body]++
+            seen[body] = seen[body] ", " $1
+          }
+        }
+      }
+      END {
+        n = asorti(count, sorted)
+        for (i = 1; i <= n; i++) {
+          if (count[sorted[i]] > 1) {
+            printf "- **[%s]** (shared by %s)\n", substr(sorted[i], 1, 100), seen[sorted[i]]
+          }
+        }
+      }
+    ' "$all_what_file"
+  fi
+  printf '\n'
+
+  # Per-member summary
+  printf '## Per-Member Summary\n\n'
+  for m in "${members[@]}"; do
+    printf '### %s\n\n' "$m"
+    for sec in Why What Not; do
+      sec_file="$tmpdir/$m/$(printf '%s' "$sec" | tr '[:upper:]' '[:lower:]')"
+      if [ -s "$sec_file" ]; then
+        printf '**%s:**\n' "$sec"
+        cat "$sec_file"
+        printf '\n'
+      fi
+    done
+    printf '\n'
+  done
+} > "$outputs_dir/team-intent-report.md"
+
+# ── 3. Conflict Report ──
+{
+  printf '%s\n\n' '# Conflict Report'
+  printf '%s\n\n' 'Identified disagreements, gaps, and missing context.'
+
+  conflicts_found=0
+
+  # Compare "What" directions for conflicts (simple: look for negation patterns)
+  printf '## Potential Conflicts\n\n'
+  for m in "${members[@]}"; do
+    not_file="$tmpdir/$m/not"
+    [ -f "$not_file" ] || continue
+    while IFS= read -r not_line; do
+      [ -z "$not_line" ] && continue
+      # Check if any other member's "What" contains similar keywords
+      for m2 in "${members[@]}"; do
+        [ "$m" = "$m2" ] && continue
+        what_file="$tmpdir/$m2/what"
+        [ -f "$what_file" ] || continue
+        keyword=$(printf '%s' "$not_line" | awk '{print tolower($1)}' | sed 's/[^a-z0-9]//g')
+        [ -z "$keyword" ] && continue
+        if grep -qi "$keyword" "$what_file" 2>/dev/null; then
+          not_summary=$(printf '%s' "$not_line" | head -c 80)
+          printf '%s\n' "- **$m says NOT** \`$not_summary\`, but **$m2** mentions \`$keyword\` in their direction"
+          conflicts_found=1
+        fi
+      done
+    done < "$not_file"
+  done
+
+  if [ "$conflicts_found" -eq 0 ]; then
+    printf '%s\n' '_No direct keyword conflicts detected between Not and What sections._'
+  fi
+  printf '\n'
+
+  printf '## Missing Context\n\n'
+  # Check which members are missing sections
+  for m in "${members[@]}"; do
+    missing=""
+    for sec in Why What Not Evidence "Decision Criteria" "Open Questions"; do
+      sec_file="$tmpdir/$m/$(printf '%s' "$sec" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')"
+      [ ! -s "$sec_file" ] && missing="$missing $sec"
+    done
+    if [ -n "$missing" ]; then
+      printf '%s\n' "- **$m** is missing:$missing"
+    fi
+  done
+  printf '\n'
+
+  # Different Open Questions
+  printf '## Divergent Open Questions\n\n'
+  for m in "${members[@]}"; do
+    oq_file="$tmpdir/$m/open-questions"
+    [ -s "$oq_file" ] || continue
+    printf '### %s\n\n' "$m"
+    cat "$oq_file"
+    printf '\n'
+  done
+} > "$outputs_dir/conflict-report.md"
+
+# ── 4. Meeting Agenda ──
+{
+  printf '%s\n\n' '# Meeting Agenda'
+  printf '**Project**: %s  \n' "$project"
+  printf '**Run**: %s\n\n' "$run_name"
+
+  printf '## Items Requiring Synchronous Discussion\n\n'
+  item=1
+
+  # Collect all open questions
+  for m in "${members[@]}"; do
+    oq_file="$tmpdir/$m/open-questions"
+    [ -s "$oq_file" ] || continue
+    while IFS= read -r line; do
+      [ -z "$line" ] && continue
+      cleaned=$(printf '%s' "$line" | sed 's/^[[:space:]]*[-*][[:space:]]*//' | head -c 120)
+      printf '%d. [Open Question — %s] %s\n' "$item" "$m" "$cleaned"
+      item=$((item + 1))
+    done < "$oq_file"
+  done
+
+  # Add conflicts as agenda items
+  for m in "${members[@]}"; do
+    not_file="$tmpdir/$m/not"
+    [ -f "$not_file" ] || continue
+    while IFS= read -r not_line; do
+      [ -z "$not_line" ] && continue
+      keyword=$(printf '%s' "$not_line" | awk '{print tolower($1)}' | sed 's/[^a-z0-9]//g')
+      [ -z "$keyword" ] && continue
+      for m2 in "${members[@]}"; do
+        [ "$m" = "$m2" ] && continue
+        what_file="$tmpdir/$m2/what"
+        [ -f "$what_file" ] || continue
+        if grep -qi "$keyword" "$what_file" 2>/dev/null; then
+          not_summary=$(printf '%s' "$not_line" | head -c 80)
+          printf '%d. [Conflict] %s says NOT: %s — vs %s\n' \
+            "$item" "$m" "$not_summary" "$m2"
+          item=$((item + 1))
+        fi
+      done
+    done < "$not_file"
+  done
+
+  if [ "$item" -eq 1 ]; then
+    printf '%s\n' '_No items requiring synchronous discussion._'
+  fi
+
+  printf '\n%s\n\n' '---'
+  printf 'Attendees: %s\n' "$(IFS=,; printf '%s' "${members[*]}")"
+  printf '\n'
+} > "$outputs_dir/meeting-agenda.md"
+
+# ── Update run.yml status ──
+sed -i 's/^status:.*$/status: compiled/' "$run_yml"
+
+printf 'Compiled %d intent files for run: %s\n' "${#intent_files[@]}" "$run_name"
+printf '  → %s/team-intent-report.md\n' "$outputs_dir"
+printf '  → %s/conflict-report.md\n' "$outputs_dir"
+printf '  → %s/meeting-agenda.md\n' "$outputs_dir"
+printf '  → %s/source-map.md\n' "$outputs_dir"
+printf 'run.yml status updated: open → compiled\n'
