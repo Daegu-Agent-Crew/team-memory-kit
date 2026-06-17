@@ -11,7 +11,7 @@ Core loop:
 
 ```bash
 bin/memory-load
-bin/memory-ingest --project <project> --member <github> --source-type codex-session --title "<title>" <file>
+bin/memory-ingest --project <project> --member <github> --source-type <codex-session|claude-session|...> --title "<title>" <file>
 bin/memory-wiki --project <project>
 bin/memory-verify
 bin/memory-sync --project <project> --member <github>

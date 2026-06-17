@@ -15,5 +15,10 @@ HOME="$home" "$repo/setup" --host codex >/dev/null
 [ -L "$home/.codex/skills/tm-load" ] || fail "expected tm-load Codex skill symlink"
 [ -L "$home/.codex/skills/tm-ingest" ] || fail "expected tm-ingest Codex skill symlink"
 
+HOME="$home" "$repo/setup" --host claude >/dev/null
+
+[ -L "$home/.claude/skills/tm-load/SKILL.md" ] || fail "expected tm-load Claude skill symlink"
+[ -L "$home/.claude/skills/tm-ingest/SKILL.md" ] || fail "expected tm-ingest Claude skill symlink"
+
 setup_output=$(HOME="$home" "$repo/bin/memory-setup")
 assert_contains "$setup_output" "ok: registry validates"

@@ -39,7 +39,7 @@ git clone <this-repo-url> team-memory-kit
 cd team-memory-kit
 bin/memory-init ../my-team-memory
 cd ../my-team-memory
-./setup --host codex
+./setup --host codex   # or --host claude for Claude Code, --host auto for both
 bin/memory-setup
 ```
 
@@ -66,6 +66,7 @@ bin/memory-ingest \
   --source-type codex-session \
   --title "First memory note" \
   /path/to/note.md
+# use --source-type claude-session for Claude Code sessions
 
 bin/memory-wiki --project team-memory
 bin/memory-verify

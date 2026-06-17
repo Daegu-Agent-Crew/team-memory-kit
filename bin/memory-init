@@ -44,6 +44,6 @@ fi
 printf 'Created team memory repo at %s\n' "$target"
 printf 'Next:\n'
 printf '  cd %s\n' "$target"
-printf '  ./setup --host codex\n'
+printf '  ./setup --host codex|claude|auto\n'
 printf '  edit .github/team-memory-members.yml and context/registry/repositories/team-memory.yml\n'
 printf '  bin/memory-setup\n'
