@@ -95,8 +95,8 @@ done
 [ -n "$source_type" ] || die "missing --source-type"
 
 case "$source_type" in
-  codex-session|messenger-manual|meeting-note|research-note|markdown|decision|repo-note) ;;
-  *) die "invalid source type '$source_type'. Use codex-session, messenger-manual, meeting-note, research-note, markdown, decision, or repo-note." ;;
+  codex-session|messenger-manual|meeting-note|research-note|markdown|decision|repo-note|pre-impl-analysis) ;;
+  *) die "invalid source type '$source_type'. Use codex-session, messenger-manual, meeting-note, research-note, markdown, decision, repo-note, or pre-impl-analysis." ;;
 esac
 
 if [ -z "$project" ]; then

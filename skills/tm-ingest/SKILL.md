@@ -28,6 +28,7 @@ Allowed source types:
 - `markdown`
 - `decision`
 - `repo-note`
+- `pre-impl-analysis` — output from a `tm-preimpl` blind-spot sweep, brainstorm, or interview session
 
 After ingesting, run:
 

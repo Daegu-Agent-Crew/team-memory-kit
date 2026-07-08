@@ -99,6 +99,15 @@ Wiki citations must point at existing records:
 Messenger posts are notifications only. They should link back to Git source
 records, wiki files, commits, or pull requests.
 
+## Pre-Implementation Patterns
+
+Before writing code, run one of three agent-assisted patterns to reduce
+rework: blind-spot sweep, brainstorm, or interview. See
+[Pre-Implementation Patterns](docs/guides/pre-implementation-patterns.md).
+
+The `tm-preimpl` skill automates the workflow and connects outputs to team
+memory via `memory-ingest`.
+
 ## Safety
 
 - Capture is explicit. No silent chat surveillance.
