@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/data/data/com.termux/files/usr/bin/bash
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -349,6 +349,14 @@ result=$(jq -n \
     decisions: $decisions,
     wiki: $wiki
   }')
+
+# ── Empty-data guard: refuse to write if projects or repositories are empty ──
+_projects_count=$(printf '%s' "$result" | jq '.projects | length')
+_repos_count=$(printf '%s' "$result" | jq '.repositories | length')
+if [ "$_projects_count" -eq 0 ] || [ "$_repos_count" -eq 0 ]; then
+  printf 'memory-dashboard: ABORTING — empty data (projects=%s, repositories=%s). Output not written.\n' "$_projects_count" "$_repos_count" >&2
+  exit 1
+fi
 
 if [ -n "$output" ]; then
   mkdir -p "$(dirname "$output")"
